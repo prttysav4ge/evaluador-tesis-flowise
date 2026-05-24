@@ -29,6 +29,7 @@ except Exception:
     pass
 
 import time
+import uuid
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -95,6 +96,129 @@ SECTION_LABELS = {
     "referencias":           "Referencias",
     "general":               "General / Sin clasificar",
 }
+
+
+# ─────────────────────────────────────────────
+#  ESTADO DE LA APLICACIÓN (workflow + session)
+# ─────────────────────────────────────────────
+# Etapas del workflow — driven por st.session_state["workflow_stage"].
+# La pantalla principal se elige según esta clave (ver Sprint 1 commit 3).
+STAGE_UPLOAD     = "upload"      # sin PDF cargado
+STAGE_CONFIGURE  = "configure"   # PDF vectorizado, eligiendo sección
+STAGE_RESULTS    = "results"     # evaluación completada, mostrando 4 pestañas
+STAGE_EMBEDDINGS = "embeddings"  # vista de fragmentación (acceso opcional)
+
+# Rúbricas disponibles. Por ahora solo UPAO; el dropdown del sidebar la elige.
+# El número de ítems es placeholder hasta que se concrete la rúbrica real (Sprint 3).
+RUBRICS = {
+    "upao_ing_sistemas": {
+        "label":   "UPAO · Ing. Sistemas",
+        "items":   12,
+        "version": "oficial",
+    },
+}
+
+# Keys de st.session_state agrupadas por scope de reset.
+_SESSION_KEYS_PDF = (
+    "pdf_uploaded",
+    "pdf_filename",
+    "pdf_sections",
+    "pdf_chunks_total",
+)
+_SESSION_KEYS_RESULT = (
+    "last_result",
+    "last_question",
+)
+_SESSION_KEYS_CONFIG = (
+    "thread_id",
+    "rubric_id",
+    "iterations",
+    "workflow_stage",
+)
+
+
+def init_session_state() -> None:
+    """
+    Inicializa todas las keys de st.session_state con sus defaults.
+    Idempotente: setdefault no sobrescribe valores ya seteados, así que
+    se puede llamar al inicio de main() en cada rerun sin perder estado.
+    """
+    defaults = {
+        # config
+        "thread_id":       str(uuid.uuid4()),
+        "rubric_id":       "upao_ing_sistemas",
+        "iterations":       2,
+        "workflow_stage":  STAGE_UPLOAD,
+        # pdf
+        "pdf_uploaded":     False,
+        "pdf_filename":     "",
+        "pdf_sections":     {},
+        "pdf_chunks_total": 0,
+        # result
+        "last_result":     None,
+        "last_question":   "",
+        # historial (preexistente — preservado por compatibilidad)
+        "query_history":   [],
+    }
+    for key, default in defaults.items():
+        st.session_state.setdefault(key, default)
+
+
+def reset_all_state() -> None:
+    """
+    Reset completo: PDF, configuración, resultados, historial.
+    Llamado por el botón 'Nueva evaluación' del sidebar.
+    Genera un nuevo thread_id.
+    """
+    for key in (*_SESSION_KEYS_PDF, *_SESSION_KEYS_RESULT, *_SESSION_KEYS_CONFIG):
+        st.session_state.pop(key, None)
+    st.session_state["query_history"] = []
+    init_session_state()
+
+
+def reset_for_new_section() -> None:
+    """
+    Reset parcial: conserva el PDF vectorizado y el thread_id; sólo limpia
+    el resultado para que el usuario pueda elegir otra sección sin re-subir.
+    """
+    for key in _SESSION_KEYS_RESULT:
+        st.session_state.pop(key, None)
+    st.session_state["workflow_stage"] = STAGE_CONFIGURE
+    init_session_state()
+
+
+def mark_pdf_uploaded(filename: str, sections: dict, chunks_total: int) -> None:
+    """
+    Marca el PDF como vectorizado y avanza el workflow al stage 'configure'.
+    Llamado por page_upload() tras un upload exitoso.
+    """
+    st.session_state["pdf_uploaded"]     = True
+    st.session_state["pdf_filename"]     = filename
+    st.session_state["pdf_sections"]     = sections or {}
+    st.session_state["pdf_chunks_total"] = chunks_total
+    st.session_state["workflow_stage"]   = STAGE_CONFIGURE
+
+
+def thread_id_short(thread_id: str | None = None) -> str:
+    """Devuelve la versión truncada del thread_id (ej. '5eb0144e-80b…')."""
+    tid = thread_id or st.session_state.get("thread_id", "")
+    if not tid:
+        return "—"
+    return f"{tid[:12]}…"
+
+
+def workflow_stage_badge() -> tuple[str, str]:
+    """Devuelve (texto, emoji) del badge según el stage actual."""
+    stage = st.session_state.get("workflow_stage", STAGE_UPLOAD)
+    if stage == STAGE_UPLOAD:
+        return "Sin PDF cargado", "🟠"
+    if stage == STAGE_CONFIGURE:
+        return "PDF listo — elige sección", "🔵"
+    if stage == STAGE_RESULTS:
+        return "Proceso completado", "🟢"
+    if stage == STAGE_EMBEDDINGS:
+        return "Visualizando fragmentos", "🔵"
+    return stage, "⚪"
 
 
 # ─────────────────────────────────────────────
@@ -803,6 +927,9 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # Inicializa st.session_state (thread_id, workflow_stage, rubric, etc.)
+    init_session_state()
 
     # ── Sidebar ──────────────────────────────────────────────────────────
     with st.sidebar:
