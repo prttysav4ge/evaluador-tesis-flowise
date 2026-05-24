@@ -479,6 +479,15 @@ def page_upload():
                 elapsed = round(time.time() - t0, 1)
 
             if status == 200 and result.get("success"):
+                # Marca PDF como vectorizado y avanza workflow → STAGE_CONFIGURE.
+                # Lo hacemos antes del render para que el sidebar refleje el cambio
+                # en cuanto el usuario navegue por los botones del bloque siguiente.
+                mark_pdf_uploaded(
+                    filename=uploaded.name,
+                    sections=result.get("sections_found", {}),
+                    chunks_total=result.get("chunks_stored", 0),
+                )
+
                 st.success(f"✅ PDF procesado en {elapsed} s")
                 st.balloons()
 
@@ -517,7 +526,24 @@ def page_upload():
                     st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown(f"> {result.get('message', '')}")
-                st.info("💡 Ve a **🔬 Ver Embeddings** para explorar los fragmentos, o a **💬 Consultar** para evaluar el proyecto de investigación.")
+
+                # Botones de avance del workflow
+                col_next, col_view = st.columns(2)
+                with col_next:
+                    if st.button(
+                        "🚀 Continuar a evaluación",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        st.session_state["workflow_stage"] = STAGE_CONFIGURE
+                        st.rerun()
+                with col_view:
+                    if st.button(
+                        "🔬 Ver fragmentación",
+                        use_container_width=True,
+                    ):
+                        st.session_state["workflow_stage"] = STAGE_EMBEDDINGS
+                        st.rerun()
             else:
                 st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
 
@@ -537,6 +563,13 @@ def page_upload():
 #  PANTALLA 2 — VER EMBEDDINGS
 # ─────────────────────────────────────────────
 def page_embeddings():
+    # Botón de regreso al stage previo (configure si hay PDF, upload si no).
+    if st.button("← Volver", help="Regresa a la pantalla principal."):
+        st.session_state["workflow_stage"] = (
+            STAGE_CONFIGURE if st.session_state.get("pdf_uploaded") else STAGE_UPLOAD
+        )
+        st.rerun()
+
     st.header("🔬 Visualizar Embeddings y Chunks")
     st.markdown(
         "Explora cómo el PDF fue fragmentado y cómo está representado en **ChromaDB**. "
@@ -800,28 +833,133 @@ def render_flowise_answer(answer_text: str):
 # ─────────────────────────────────────────────
 #  PANTALLA 3 — CONSULTAR AGENTES
 # ─────────────────────────────────────────────
-def page_query():
-    st.header("💬 Consultar Agentes")
-    st.markdown(
-        "Escribe tu pregunta o instrucción de evaluación. "
-        "El sistema recuperará los fragmentos más relevantes de ChromaDB "
-        "usando similitud semántica y los enviará a los **agentes Flowise** para que generen la evaluación."
-    )
+def _render_query_result_block(
+    question: str,
+    result: dict,
+    elapsed: float,
+) -> None:
+    """
+    Renderiza el bloque de resultado de una consulta exitosa.
+    Extraído de page_query para poder volver a mostrarlo entre reruns
+    leyendo desde st.session_state['last_result'].
+    """
+    import json as _json
 
-    # ── Verificar que hay datos ──────────────────────────────────────────
-    col_info = api_collection_info()
-    if col_info is None:
-        st.error("No se puede conectar con el backend.")
-        return
+    # ── Métricas de la consulta ──────────────────────────────────
+    st.success(f"✅ Consulta completada en **{elapsed} s**")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Modo de ejecución", result.get("mode", "—"))
+    m2.metric("Chunks recuperados", result.get("chunks_retrieved", "—"))
+    m3.metric("Tiempo", f"{result.get('elapsed_seconds', elapsed)} s")
 
-    total = col_info.get("total_chunks", 0)
-    if total == 0:
-        st.warning("⚠️ No hay ningún proyecto de investigación cargado. Primero sube un PDF en **📄 Cargar PDF**.")
-        return
+    # ── Contexto recuperado (RAG) ────────────────────────────────
+    with st.expander("📖 Contexto recuperado de ChromaDB (RAG)", expanded=False):
+        st.markdown(
+            "_Estos son los fragmentos del proyecto de investigación que el sistema consideró más relevantes "
+            "para tu pregunta. Se enviaron como contexto a los agentes._"
+        )
+        context_preview = result.get("context_preview", "")
+        st.text_area("Contexto (preview):", value=context_preview, height=200, disabled=True)
 
-    st.success(f"📚 ChromaDB tiene **{total} fragmentos** listos para consultar.")
+    # ── Respuesta de los agentes ─────────────────────────────────
+    st.subheader("🤖 Respuesta de los agentes")
 
-    # ── Formulario de consulta ───────────────────────────────────────────
+    raw_result = result.get("result", {})
+
+    if "flowise_response" in raw_result:
+        flowise_resp = raw_result["flowise_response"]
+        if isinstance(flowise_resp, dict):
+            answer_text = (
+                flowise_resp.get("text")
+                or flowise_resp.get("output")
+                or flowise_resp.get("answer")
+                or str(flowise_resp)
+            )
+        else:
+            answer_text = str(flowise_resp)
+
+        render_flowise_answer(answer_text)
+
+        if isinstance(flowise_resp, dict) and len(flowise_resp) > 1:
+            with st.expander("🔧 Ver payload completo de Flowise (debug)", expanded=False):
+                st.json(flowise_resp)
+
+    elif "agents" in raw_result or any(
+        k in raw_result for k in ["mentor_intake", "investigador", "auditor", "final"]
+    ):
+        st.markdown("_Resultado de los agentes Python secuenciales:_")
+        for agent_name, agent_output in raw_result.items():
+            with st.expander(f"🤖 {agent_name.replace('_', ' ').title()}"):
+                if isinstance(agent_output, str):
+                    st.markdown(agent_output)
+                else:
+                    st.json(agent_output)
+    else:
+        st.json(raw_result)
+
+    # ── Texto sugerido ───────────────────────────────────────────
+    texto_sugerido   = raw_result.get("texto_sugerido")
+    original_context = raw_result.get("original_context", result.get("context_preview", ""))
+
+    if texto_sugerido:
+        st.markdown("---")
+        st.subheader("✏️ Texto sugerido para reemplazar esta sección")
+        st.markdown(
+            "_Versión mejorada generada por los agentes. "
+            "Incorpora las recomendaciones priorizadas y los hallazgos del "
+            "**Agente Investigador**. Lista para copiar y pegar en tu tesis._"
+        )
+
+        col_orig, col_sug = st.columns(2, gap="medium")
+
+        with col_orig:
+            st.markdown(
+                "<p style='font-weight:600;color:#888'>📄 Texto original analizado</p>",
+                unsafe_allow_html=True,
+            )
+            st.text_area(
+                "original",
+                value=original_context,
+                height=380,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+
+        with col_sug:
+            st.markdown(
+                "<p style='font-weight:600;color:#2e7d32'>✨ Texto mejorado (sugerido)</p>",
+                unsafe_allow_html=True,
+            )
+            st.text_area(
+                "sugerido",
+                value=texto_sugerido,
+                height=380,
+                label_visibility="collapsed",
+                help="Selecciona todo el texto (Ctrl+A dentro del área) y copia.",
+            )
+
+        st.caption(
+            "💡 Este texto es una **sugerencia** basada en el análisis. "
+            "Revísalo y adáptalo antes de incluirlo en tu tesis."
+        )
+
+    elif texto_sugerido is None:
+        st.warning(
+            "⚠️ **Texto sugerido no disponible** — el LLM para generarlo no está configurado.\n\n"
+            "Abre el archivo `.env` y añade tu clave de Groq:\n"
+            "```\nLLM_PROVIDER=groq\nGROQ_API_KEY=gsk_...\n```\n"
+            "Obtén la clave gratis en [console.groq.com](https://console.groq.com) → API Keys. "
+            "Luego **reinicia el backend** (`python main.py`)."
+        )
+
+
+def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, bool]:
+    """
+    Renderiza el formulario de consulta. Devuelve (question, top_k, session_id, send_clicked).
+    Extraído de page_query para que sea consumible solo en STAGE_CONFIGURE.
+    """
+    st.success(f"📚 ChromaDB tiene **{total_chunks} fragmentos** listos para consultar.")
+
     examples = [
         "Evalúa la formulación del problema de investigación",
         "¿Es adecuado el marco metodológico del proyecto de investigación?",
@@ -844,20 +982,20 @@ def page_query():
         placeholder="ej. Evalúa la formulación del problema de investigación...",
     )
 
-    # ── Parámetros avanzados ─────────────────────────────────────────────
     with st.expander("⚙️ Parámetros avanzados"):
         top_k = st.slider(
             "Top-K (fragmentos a recuperar de ChromaDB)",
             min_value=1, max_value=20, value=5,
             help="Cuántos fragmentos relevantes se le pasan al agente como contexto.",
         )
+        # Por defecto usamos el thread_id del workflow para que Flowise mantenga
+        # contexto entre consultas del mismo PDF. El usuario puede sobrescribirlo.
         session_id = st.text_input(
             "Session ID (opcional)",
-            placeholder="p.ej. sesion-proyecto-2024",
-            help="Para mantener historial de conversación en Flowise.",
+            value=st.session_state.get("thread_id", ""),
+            help="Para mantener historial de conversación en Flowise. Por defecto, el thread_id del workflow.",
         )
 
-    # ── Botón de envío ───────────────────────────────────────────────────
     send = st.button(
         "🚀 Enviar consulta a los agentes",
         type="primary",
@@ -868,133 +1006,83 @@ def page_query():
     if len(question.strip()) > 0 and len(question.strip()) < 5:
         st.caption("La pregunta debe tener al menos 5 caracteres.")
 
+    # Link discreto a ver fragmentación
+    if st.button("🔬 Ver fragmentación del PDF", help="Visualiza chunks y embeddings"):
+        st.session_state["workflow_stage"] = STAGE_EMBEDDINGS
+        st.rerun()
+
+    return question, top_k, session_id or None, send
+
+
+def page_query():
+    st.header("💬 Consultar Agentes")
+
+    # ── Verificar que hay datos ──────────────────────────────────────────
+    col_info = api_collection_info()
+    if col_info is None:
+        st.error("No se puede conectar con el backend.")
+        return
+
+    total = col_info.get("total_chunks", 0)
+    if total == 0:
+        st.warning("⚠️ No hay ningún proyecto de investigación cargado. Primero sube un PDF.")
+        if st.button("← Volver a cargar PDF"):
+            st.session_state["workflow_stage"] = STAGE_UPLOAD
+            st.rerun()
+        return
+
+    # ── Si hay un resultado guardado → mostrarlo (sobrevive reruns) ─────
+    if (
+        st.session_state.get("workflow_stage") == STAGE_RESULTS
+        and st.session_state.get("last_result") is not None
+    ):
+        stored = st.session_state["last_result"]
+        _render_query_result_block(
+            question=st.session_state.get("last_question", ""),
+            result=stored,
+            elapsed=stored.get("elapsed_seconds", 0.0),
+        )
+        st.markdown("---")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔁 Hacer otra consulta (mismo PDF)", use_container_width=True):
+                reset_for_new_section()
+                st.rerun()
+        with col_b:
+            if st.button("🆕 Nueva evaluación (otro PDF)", use_container_width=True):
+                reset_all_state()
+                st.rerun()
+        return
+
+    st.markdown(
+        "Escribe tu pregunta o instrucción de evaluación. "
+        "El sistema recuperará los fragmentos más relevantes de ChromaDB "
+        "usando similitud semántica y los enviará a los **agentes Flowise** para que generen la evaluación."
+    )
+
+    # ── Formulario de consulta (extraído a helper) ──────────────────────
+    question, top_k, session_id, send = _render_query_form_block(total)
+
+    # ── Ejecutar consulta + persistir resultado + avanzar al stage RESULTS
     if send and len(question.strip()) >= 5:
         with st.spinner(
             "Los agentes están analizando el proyecto de investigación… "
             "puede tardar entre 1 y 5 minutos (más si Groq aplica rate-limiting)."
         ):
             t0 = time.time()
-            result, status = api_query(question.strip(), top_k=top_k, session_id=session_id or None)
+            result, status = api_query(question.strip(), top_k=top_k, session_id=session_id)
             elapsed = round(time.time() - t0, 1)
 
         if status == 200:
-            # ── Métricas de la consulta ──────────────────────────────────
-            st.success(f"✅ Consulta completada en **{elapsed} s**")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Modo de ejecución", result.get("mode", "—"))
-            m2.metric("Chunks recuperados", result.get("chunks_retrieved", "—"))
-            m3.metric("Tiempo", f"{result.get('elapsed_seconds', elapsed)} s")
+            # Persistir para que sobreviva reruns y avanzar workflow → RESULTS.
+            # En la próxima ejecución de page_query, el branch del top renderiza
+            # _render_query_result_block leyendo desde session_state.
+            st.session_state["last_question"] = question.strip()
+            st.session_state["last_result"]   = {**result, "elapsed_seconds": elapsed}
+            st.session_state["workflow_stage"] = STAGE_RESULTS
 
-            # ── Contexto recuperado (RAG) ────────────────────────────────
-            with st.expander("📖 Contexto recuperado de ChromaDB (RAG)", expanded=False):
-                st.markdown(
-                    "_Estos son los fragmentos del proyecto de investigación que el sistema consideró más relevantes "
-                    "para tu pregunta. Se enviaron como contexto a los agentes._"
-                )
-                context_preview = result.get("context_preview", "")
-                st.text_area("Contexto (preview):", value=context_preview, height=200, disabled=True)
-
-            # ── Respuesta de los agentes ─────────────────────────────────
-            st.subheader("🤖 Respuesta de los agentes")
-
-            raw_result = result.get("result", {})
-
-            # Flowise → resultado en raw_result["flowise_response"]
-            if "flowise_response" in raw_result:
-                flowise_resp = raw_result["flowise_response"]
-                # Flowise devuelve {"text": "...", ...}
-                if isinstance(flowise_resp, dict):
-                    answer_text = (
-                        flowise_resp.get("text")
-                        or flowise_resp.get("output")
-                        or flowise_resp.get("answer")
-                        or str(flowise_resp)
-                    )
-                else:
-                    answer_text = str(flowise_resp)
-
-                render_flowise_answer(answer_text)
-
-                # Mostrar metadata adicional de Flowise si existe (colapsado)
-                if isinstance(flowise_resp, dict) and len(flowise_resp) > 1:
-                    with st.expander("🔧 Ver payload completo de Flowise (debug)", expanded=False):
-                        st.json(flowise_resp)
-
-            # Agentes Python → cada agente tiene su clave
-            elif "agents" in raw_result or any(
-                k in raw_result for k in ["mentor_intake", "investigador", "auditor", "final"]
-            ):
-                st.markdown("_Resultado de los agentes Python secuenciales:_")
-                for agent_name, agent_output in raw_result.items():
-                    with st.expander(f"🤖 {agent_name.replace('_', ' ').title()}"):
-                        if isinstance(agent_output, str):
-                            st.markdown(agent_output)
-                        else:
-                            st.json(agent_output)
-
-            # Fallback — mostrar el JSON crudo
-            else:
-                st.json(raw_result)
-
-            # ── Texto sugerido ───────────────────────────────────────────
-            texto_sugerido   = raw_result.get("texto_sugerido")
-            original_context = raw_result.get("original_context", result.get("context_preview", ""))
-
-            if texto_sugerido:
-                st.markdown("---")
-                st.subheader("✏️ Texto sugerido para reemplazar esta sección")
-                st.markdown(
-                    "_Versión mejorada generada por los agentes. "
-                    "Incorpora las recomendaciones priorizadas y los hallazgos del "
-                    "**Agente Investigador**. Lista para copiar y pegar en tu tesis._"
-                )
-
-                col_orig, col_sug = st.columns(2, gap="medium")
-
-                with col_orig:
-                    st.markdown(
-                        "<p style='font-weight:600;color:#888'>📄 Texto original analizado</p>",
-                        unsafe_allow_html=True,
-                    )
-                    st.text_area(
-                        "original",
-                        value=original_context,
-                        height=380,
-                        disabled=True,
-                        label_visibility="collapsed",
-                    )
-
-                with col_sug:
-                    st.markdown(
-                        "<p style='font-weight:600;color:#2e7d32'>✨ Texto mejorado (sugerido)</p>",
-                        unsafe_allow_html=True,
-                    )
-                    st.text_area(
-                        "sugerido",
-                        value=texto_sugerido,
-                        height=380,
-                        label_visibility="collapsed",
-                        help="Selecciona todo el texto (Ctrl+A dentro del área) y copia.",
-                    )
-
-                st.caption(
-                    "💡 Este texto es una **sugerencia** basada en el análisis. "
-                    "Revísalo y adáptalo antes de incluirlo en tu tesis."
-                )
-
-            elif texto_sugerido is None and status == 200:
-                st.warning(
-                    "⚠️ **Texto sugerido no disponible** — el LLM para generarlo no está configurado.\n\n"
-                    "Abre el archivo `.env` y añade tu clave de Groq:\n"
-                    "```\nLLM_PROVIDER=groq\nGROQ_API_KEY=gsk_...\n```\n"
-                    "Obtén la clave gratis en [console.groq.com](https://console.groq.com) → API Keys. "
-                    "Luego **reinicia el backend** (`python main.py`)."
-                )
-
-            # ── Guardar en historial de sesión ───────────────────────────
-            if "query_history" not in st.session_state:
-                st.session_state["query_history"] = []
-            st.session_state["query_history"].append(
+            # Guardar también en el historial (preexistente)
+            st.session_state.setdefault("query_history", []).append(
                 {
                     "question": question.strip(),
                     "elapsed": elapsed,
@@ -1002,15 +1090,16 @@ def page_query():
                     "mode": result.get("mode"),
                 }
             )
+            st.rerun()
 
         else:
             st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
             if status == 404:
-                st.info("Asegúrate de haber subido un PDF en **📄 Cargar PDF**.")
+                st.info("Asegúrate de haber subido un PDF.")
             elif status == 502:
                 st.info(
-                    "Flowise no está respondiendo. Verifica que esté corriendo en "
-                    "`http://localhost:3000` y que el chatflow ID sea correcto."
+                    "Flowise no está respondiendo. Verifica que esté corriendo y "
+                    "que FLOWISE_CHATFLOW_ID sea correcto."
                 )
             elif status == 504:
                 st.info(
@@ -1064,12 +1153,9 @@ def main():
         )
         return
 
-    # ── Bridge temporal hasta Commit 3 del Sprint 1 ──────────────────────
-    # Si ya hay chunks en ChromaDB pero el workflow está en STAGE_UPLOAD
-    # (ej. el usuario recargó la página tras subir el PDF), avanzamos al
-    # stage 'configure' para no devolverlo a la pantalla de carga. El
-    # próximo commit reemplaza este bridge con mark_pdf_uploaded() llamado
-    # explícitamente desde page_upload tras un upload exitoso.
+    # ── Recuperación de sesión: si el usuario refresca la página y ya hay
+    # chunks en ChromaDB, saltamos directo a 'configure' en lugar de
+    # devolverlo al uploader (que rechazaría el mismo archivo).
     if st.session_state["workflow_stage"] == STAGE_UPLOAD:
         col_info = api_collection_info()
         if col_info and col_info.get("total_chunks", 0) > 0:
