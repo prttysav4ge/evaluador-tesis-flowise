@@ -111,8 +111,19 @@ def api_query(question, top_k=5, session_id=None):
     if session_id:
         payload["session_id"] = session_id
     try:
-        r = requests.post(f"{API_BASE}/query", json=payload, timeout=180)
+        # Timeout generoso: el pipeline puede tardar ~90s (Flowise) + ~120s
+        # (fallback Python con 6 agentes) + ~45s (texto sugerido). Si Groq
+        # está throttling (429), los reintentos suman aún más. 600 s = 10 min.
+        r = requests.post(f"{API_BASE}/query", json=payload, timeout=600)
         return r.json(), r.status_code
+    except requests.exceptions.ReadTimeout:
+        return {
+            "detail": (
+                "El backend tardó más de 10 minutos en responder. "
+                "Probablemente Groq está throttling (límite TPM). "
+                "Espera 1 min y vuelve a intentar, o reduce Top-K en parámetros avanzados."
+            )
+        }, 504
     except Exception as e:
         return {"detail": str(e)}, 500
 
@@ -592,7 +603,10 @@ def page_query():
         st.caption("La pregunta debe tener al menos 5 caracteres.")
 
     if send and len(question.strip()) >= 5:
-        with st.spinner("Los agentes están analizando el proyecto de investigación… esto puede tardar 30–120 segundos."):
+        with st.spinner(
+            "Los agentes están analizando el proyecto de investigación… "
+            "puede tardar entre 1 y 5 minutos (más si Groq aplica rate-limiting)."
+        ):
             t0 = time.time()
             result, status = api_query(question.strip(), top_k=top_k, session_id=session_id or None)
             elapsed = round(time.time() - t0, 1)
@@ -731,6 +745,16 @@ def page_query():
                 st.info(
                     "Flowise no está respondiendo. Verifica que esté corriendo en "
                     "`http://localhost:3000` y que el chatflow ID sea correcto."
+                )
+            elif status == 504:
+                st.info(
+                    "💡 **Sugerencias para acelerar la consulta:**\n"
+                    "- Reduce **Top-K** en parámetros avanzados (menos contexto = menos tokens).\n"
+                    "- Si tu plan de Groq es Free, considera actualizar al Dev Tier en "
+                    "[console.groq.com/settings/billing](https://console.groq.com/settings/billing) "
+                    "para subir el límite TPM de 6 000 a 30 000+.\n"
+                    "- También puedes desactivar Flowise con `USE_FLOWISE=false` en `.env` "
+                    "para saltar el primer intento (90 s) y usar directamente los agentes Python."
                 )
 
     # ── Historial de consultas ───────────────────────────────────────────

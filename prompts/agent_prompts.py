@@ -228,7 +228,9 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
 # ====================================================================== #
 
 def build_mentor_final_prompt(question: str, memory: Dict[str, Any]) -> str:
-    full_memory = json.dumps(memory, ensure_ascii=False, indent=2)
+    # Serialización compacta (sin indent) para reducir el tamaño del prompt
+    # y evitar que el agente 6 reciba >2000 tokens de contexto de agentes previos.
+    full_memory = json.dumps(memory, ensure_ascii=False, separators=(",", ":"))
     return f"""Eres el MENTOR FINAL de evaluación de tesis universitarias.
 
 ROL: Sintetizar las evaluaciones de todos los agentes y entregar feedback pedagógico final al estudiante.

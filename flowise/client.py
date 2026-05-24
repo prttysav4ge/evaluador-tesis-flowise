@@ -41,7 +41,10 @@ class FlowiseClient:
         self.base_url = settings.FLOWISE_URL.rstrip("/")
         self.chatflow_id = settings.FLOWISE_CHATFLOW_ID
         self.api_key = settings.FLOWISE_API_KEY
-        self.timeout = 300.0  # 5 min — agentflow + posible texto sugerido
+        # 90 s — si Flowise Cloud no responde aquí, mejor caer al fallback Python.
+        # Esperar 5 min bloquea innecesariamente al cliente cuando el cloud tiene
+        # problemas (504 / Cloudflare gateway timeouts son comunes).
+        self.timeout = 90.0
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}

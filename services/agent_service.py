@@ -30,10 +30,11 @@ Pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
@@ -58,27 +59,55 @@ logger = logging.getLogger(__name__)
 def _get_llm() -> BaseChatModel:
     """
     Retorna la instancia del LLM configurado en el .env.
-    Soporta OpenAI y Ollama.
+    Soporta Groq, OpenAI y Ollama (y modo 'auto' con detección por claves).
+
+    Orden de prioridad en modo auto:
+      1. Groq  — si GROQ_API_KEY está configurado
+      2. OpenAI — si OPENAI_API_KEY está configurado
+      3. Ollama — fallback local
     """
     from app.config import settings
+    from langchain_openai import ChatOpenAI
 
     provider = settings.LLM_PROVIDER.lower()
 
-    if provider == "openai":
-        from langchain_openai import ChatOpenAI
+    # ── Groq ──────────────────────────────────────────────────────────────
+    use_groq = (provider == "groq") or (provider == "auto" and settings.GROQ_API_KEY)
+    if use_groq:
+        if not settings.GROQ_API_KEY:
+            raise ValueError(
+                "LLM_PROVIDER=groq pero GROQ_API_KEY no está configurado en .env."
+            )
+        # Groq expone una API compatible con OpenAI → usamos langchain-openai.
+        # max_tokens=800 limita la longitud de cada respuesta JSON de agente.
+        # max_retries=0: desactiva el retry interno del SDK; _ainvoke_with_retry
+        # lo gestiona con backoff correcto basado en el Retry-After de Groq.
+        return ChatOpenAI(
+            api_key=settings.GROQ_API_KEY,
+            model=settings.GROQ_MODEL,
+            base_url="https://api.groq.com/openai/v1",
+            temperature=0.3,
+            max_tokens=800,
+            max_retries=0,
+        )
 
+    # ── OpenAI ────────────────────────────────────────────────────────────
+    use_openai = (provider == "openai") or (provider == "auto" and settings.OPENAI_API_KEY)
+    if use_openai:
         if not settings.OPENAI_API_KEY:
             raise ValueError(
-                "OPENAI_API_KEY no configurado. "
-                "Agrégalo al archivo .env o cambia LLM_PROVIDER=ollama"
+                "LLM_PROVIDER=openai pero OPENAI_API_KEY no está configurado en .env."
             )
         return ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
             model=settings.OPENAI_MODEL,
             temperature=0.3,
+            max_tokens=800,
+            max_retries=0,
         )
 
-    elif provider == "ollama":
+    # ── Ollama ────────────────────────────────────────────────────────────
+    if provider in ("ollama", "auto"):
         try:
             from langchain_ollama import ChatOllama  # paquete nuevo (recomendado)
         except ImportError:
@@ -88,12 +117,12 @@ def _get_llm() -> BaseChatModel:
             base_url=settings.OLLAMA_BASE_URL,
             model=settings.OLLAMA_MODEL,
             temperature=0.3,
+            num_predict=800,   # equivalente a max_tokens para Ollama
         )
 
-    else:
-        raise ValueError(
-            f"LLM_PROVIDER='{provider}' no válido. Usa 'openai' o 'ollama'."
-        )
+    raise ValueError(
+        f"LLM_PROVIDER='{provider}' no válido. Usa: auto | groq | openai | ollama"
+    )
 
 
 def _parse_json(text: str) -> Dict[str, Any]:
@@ -128,6 +157,101 @@ def _parse_json(text: str) -> Dict[str, Any]:
     return {"raw_output": text, "parse_error": True}
 
 
+# ── Constantes de retry ────────────────────────────────────────────────────
+_LLM_CALL_TIMEOUT  = 30   # segundos máximos por intento individual de LLM
+_MAX_RETRIES       = 4    # reintentos ante 429 o timeout (5 intentos en total)
+
+
+def _parse_wait_seconds(exc: Exception) -> float:
+    """
+    Extrae el tiempo de espera en segundos del mensaje de error 429 de Groq.
+
+    Groq incluye en el body: "Please try again in 2.47s." o "in 1m30.5s."
+    También intenta el header Retry-After si está disponible en la respuesta.
+    Retorna 5.0 s como fallback conservador.
+    """
+    # 1. Intentar parsear desde el mensaje de texto (más fiable en Groq)
+    match = re.search(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)s", str(exc))
+    if match:
+        minutes = float(match.group(1) or 0)
+        seconds = float(match.group(2))
+        return minutes * 60 + seconds + 0.5   # +0.5 s de buffer
+
+    # 2. Header Retry-After (openai.RateLimitError adjunta .response)
+    response = getattr(exc, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", {})
+        for header in ("retry-after", "x-ratelimit-reset-requests"):
+            raw = headers.get(header, "")
+            if not raw:
+                continue
+            try:
+                return float(raw) + 0.5
+            except ValueError:
+                pass
+
+    return 5.0   # fallback
+
+
+async def _ainvoke_with_retry(
+    llm: BaseChatModel,
+    messages: List,
+) -> Any:
+    """
+    Llama a llm.ainvoke con reintentos para:
+      - openai.RateLimitError / 429  (Groq TPM/RPM)
+      - asyncio.TimeoutError         (LLM lento o colgado)
+
+    Cada intento tiene su propio timeout de _LLM_CALL_TIMEOUT segundos.
+    El tiempo de espera entre reintentos se lee del mensaje de Groq
+    ("Please try again in Xs") para respetar el ventana de rate-limit exacta.
+    """
+    import openai as _openai   # import local para no depender en el nivel de módulo
+
+    last_exc: Exception | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return await asyncio.wait_for(
+                llm.ainvoke(messages),
+                timeout=_LLM_CALL_TIMEOUT,
+            )
+
+        except asyncio.TimeoutError as exc:
+            last_exc = exc
+            if attempt == _MAX_RETRIES:
+                logger.error(
+                    f"⏰ LLM no respondió en {_LLM_CALL_TIMEOUT}s tras "
+                    f"{_MAX_RETRIES + 1} intentos. Abortando."
+                )
+                raise
+            wait = 3.0 * (2 ** attempt)
+            logger.warning(
+                f"⏰ Timeout LLM (intento {attempt + 1}/{_MAX_RETRIES + 1}). "
+                f"Reintentando en {wait:.1f}s…"
+            )
+            await asyncio.sleep(wait)
+
+        except _openai.RateLimitError as exc:
+            last_exc = exc
+            if attempt == _MAX_RETRIES:
+                logger.error(
+                    f"❌ Groq 429 persistente tras {_MAX_RETRIES + 1} intentos. "
+                    "Considera actualizar al Dev Tier en console.groq.com/settings/billing "
+                    "o reducir top_k en la consulta."
+                )
+                raise
+            wait = _parse_wait_seconds(exc)
+            logger.warning(
+                f"⚠️  Groq 429 Rate Limit "
+                f"(intento {attempt + 1}/{_MAX_RETRIES + 1}). "
+                f"Esperando {wait:.1f}s (Retry-After de Groq)…"
+            )
+            await asyncio.sleep(wait)
+
+    raise last_exc  # type: ignore[misc]  — nunca debería alcanzarse
+
+
 async def _run_agent(
     agent_name: str,
     prompt_text: str,
@@ -135,6 +259,7 @@ async def _run_agent(
 ) -> Dict[str, Any]:
     """
     Ejecuta un agente: envía el prompt al LLM y parsea la respuesta JSON.
+    Los reintentos por 429 y los timeouts los gestiona _ainvoke_with_retry.
     """
     logger.info(f"🤖 Ejecutando agente: {agent_name}")
 
@@ -143,7 +268,7 @@ async def _run_agent(
         HumanMessage(content=prompt_text),
     ]
 
-    response = await llm.ainvoke(messages)
+    response = await _ainvoke_with_retry(llm, messages)
     result = _parse_json(response.content)
 
     logger.info(f"✅ Agente '{agent_name}' completado")
@@ -252,13 +377,14 @@ def _get_texto_llm() -> "BaseChatModel":
             raise ValueError(
                 "LLM_PROVIDER=groq pero GROQ_API_KEY no está configurado en .env."
             )
-        # Groq expone una API compatible con OpenAI → usamos langchain-openai
+        # max_retries=0: los reintentos los gestiona _ainvoke_with_retry
         return ChatOpenAI(
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
             base_url="https://api.groq.com/openai/v1",
             temperature=0.5,
             max_tokens=1500,
+            max_retries=0,
         )
 
     # ── OpenAI ────────────────────────────────────────────────────────────
@@ -273,6 +399,7 @@ def _get_texto_llm() -> "BaseChatModel":
             model=settings.OPENAI_MODEL,
             temperature=0.5,
             max_tokens=1500,
+            max_retries=0,
         )
 
     # ── Ollama ────────────────────────────────────────────────────────────
@@ -335,6 +462,6 @@ async def generate_texto_sugerido(
         f"✏️  Generando texto sugerido "
         f"[{type(llm).__name__}]…"
     )
-    response = await llm.ainvoke(messages)
+    response = await _ainvoke_with_retry(llm, messages)
     logger.info("✅ Texto sugerido generado")
     return response.content.strip()

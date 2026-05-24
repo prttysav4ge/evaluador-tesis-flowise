@@ -10,11 +10,13 @@ Orquesta el pipeline RAG + agentes:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -122,27 +124,40 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     #  3. Agentes                                                          #
     # ------------------------------------------------------------------ #
     if settings.USE_FLOWISE:
-        mode = "flowise"
-        result = await _call_flowise(body.question, retrieved_context, body.session_id)
+        result, mode = await _call_flowise_with_fallback(
+            body.question, retrieved_context, body.session_id
+        )
     else:
         mode = "python_agents"
         result = await _call_python_agents(body.question, retrieved_context)
 
     # ------------------------------------------------------------------ #
     #  4. Generar texto sugerido (post-pipeline, ambos modos)            #
+    #     Se limita a 45 s para no superar el timeout total del cliente. #
     # ------------------------------------------------------------------ #
+    _TEXTO_SUGERIDO_TIMEOUT = 45  # segundos máximos para esta llamada extra
     try:
         from services.agent_service import generate_texto_sugerido
         evaluation_data       = _extract_evaluation_data(result)
         investigador_findings = _extract_investigador_findings(result)
-        texto_sugerido = await generate_texto_sugerido(
-            original_context=retrieved_context,
-            question=body.question,
-            final_evaluation=evaluation_data,
-            investigador_findings=investigador_findings,
+        texto_sugerido = await asyncio.wait_for(
+            generate_texto_sugerido(
+                original_context=retrieved_context,
+                question=body.question,
+                final_evaluation=evaluation_data,
+                investigador_findings=investigador_findings,
+            ),
+            timeout=_TEXTO_SUGERIDO_TIMEOUT,
         )
         result["texto_sugerido"]    = texto_sugerido
         result["original_context"]  = retrieved_context   # para comparación en UI
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"⚠️  generate_texto_sugerido excedió {_TEXTO_SUGERIDO_TIMEOUT}s — "
+            "se omite en esta respuesta."
+        )
+        result["texto_sugerido"]   = None
+        result["original_context"] = retrieved_context
     except Exception as exc:
         logger.warning(f"⚠️  No se pudo generar texto sugerido: {exc}")
         result["texto_sugerido"]   = None
@@ -165,11 +180,36 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
 #  Helpers privados                                                       #
 # ====================================================================== #
 
-async def _call_flowise(
+_FLOWISE_FILE_ERROR = "filePath"   # señal de nodo con archivo local roto en cloud
+
+# Errores transitorios de infraestructura (Flowise Cloud / Cloudflare) que
+# justifican un fallback automático a los agentes Python:
+#   - 502 Bad Gateway        → upstream caído
+#   - 503 Service Unavailable → upstream saturado
+#   - 504 Gateway Timeout    → upstream lento (caso común con agentflow + 6 LLMs)
+_FLOWISE_TRANSIENT_HTTP = ("HTTP 502", "HTTP 503", "HTTP 504")
+
+
+def _is_transient_flowise_error(exc_msg: str) -> bool:
+    """True si el error de Flowise es un fallo de infraestructura recuperable."""
+    if any(code in exc_msg for code in _FLOWISE_TRANSIENT_HTTP):
+        return True
+    # Cloudflare / nginx devuelven HTML como cuerpo de error
+    if "<!DOCTYPE html" in exc_msg or "<html" in exc_msg:
+        return True
+    return False
+
+
+async def _call_flowise_with_fallback(
     question: str,
     context: str,
     session_id: Optional[str],
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], str]:
+    """
+    Intenta llamar a Flowise. Si devuelve un error recuperable (nodo con
+    archivo local roto, timeout 504, gateway caído), hace fallback automático
+    a los agentes Python. Retorna (result_dict, mode_str).
+    """
     from flowise.client import flowise_client
 
     try:
@@ -178,7 +218,64 @@ async def _call_flowise(
             context=context,
             session_id=session_id,
         )
-        return {"flowise_response": response}
+        return {"flowise_response": response}, "flowise"
+
+    except ValueError as exc:
+        exc_msg = str(exc)
+
+        # Flowise 500 por nodo con ruta de archivo local que no existe en cloud
+        if _FLOWISE_FILE_ERROR in exc_msg:
+            logger.warning(
+                "⚠️  Flowise devolvió 500 (filePath undefined). "
+                "El chatflow tiene un nodo Document Loader con archivo local "
+                "que no existe en Flowise Cloud. "
+                "Haciendo fallback a agentes Python automáticamente."
+            )
+            result = await _call_python_agents(question, context)
+            result["_flowise_fallback"] = (
+                "Flowise Cloud falló (nodo con archivo local roto). "
+                "Se usaron los agentes Python como fallback."
+            )
+            return result, "python_agents_fallback"
+
+        # Errores transitorios de infraestructura (504/502/503, HTML de Cloudflare)
+        if _is_transient_flowise_error(exc_msg):
+            logger.warning(
+                "⚠️  Flowise Cloud devolvió error transitorio (timeout/gateway). "
+                "Haciendo fallback a agentes Python automáticamente."
+            )
+            result = await _call_python_agents(question, context)
+            result["_flowise_fallback"] = (
+                "Flowise Cloud no respondió a tiempo (504/502/503). "
+                "Se usaron los agentes Python como fallback."
+            )
+            return result, "python_agents_fallback"
+
+        # Cualquier otro error de Flowise → propagar como 502
+        logger.exception(f"Error llamando a Flowise [ValueError]: {exc_msg}")
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"[ValueError] {exc_msg} — "
+                "Verifica que Flowise esté corriendo y que FLOWISE_CHATFLOW_ID sea correcto. "
+                "Puedes cambiar USE_FLOWISE=false en .env para usar los agentes Python directamente."
+            ),
+        )
+
+    except (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError) as exc:
+        # Timeout o conexión caída del cliente HTTP → fallback automático
+        exc_type = type(exc).__name__
+        logger.warning(
+            f"⚠️  Flowise Cloud inaccesible ({exc_type}). "
+            "Haciendo fallback a agentes Python automáticamente."
+        )
+        result = await _call_python_agents(question, context)
+        result["_flowise_fallback"] = (
+            f"Flowise Cloud inaccesible ({exc_type}). "
+            "Se usaron los agentes Python como fallback."
+        )
+        return result, "python_agents_fallback"
+
     except Exception as exc:
         exc_type = type(exc).__name__
         exc_msg  = str(exc) or "(sin mensaje — probablemente timeout)"
