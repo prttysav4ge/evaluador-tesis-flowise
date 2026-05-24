@@ -3,8 +3,8 @@
 # ============================================
 
 # API Framework
-fastapi>=0.116.0      # 0.116+ es compatible con starlette>=1.0.x (requerido por streamlit 1.35+)
-starlette>=1.0.0      # streamlit 1.35+ requiere DEFAULT_EXCLUDED_CONTENT_TYPES (starlette 0.46+)
+fastapi>=0.116.0      # FastAPI: TestClient se importa también desde streamlit_app.py
+starlette>=0.46.0     # streamlit 1.35+ requiere DEFAULT_EXCLUDED_CONTENT_TYPES (starlette 0.46+)
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 

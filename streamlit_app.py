@@ -1,5 +1,5 @@
 """
-🎓 Evaluador de Proyecto de Investigación — Interfaz Streamlit
+🎓 Evaluador de Proyecto de Investigación — Interfaz Streamlit (TODO EN UNO)
 ==========================================
 Interfaz visual de 3 pantallas para el POC RAG Multiagente:
 
@@ -7,20 +7,50 @@ Interfaz visual de 3 pantallas para el POC RAG Multiagente:
   🔬  Ver Embeddings  → visualiza cómo el PDF se fragmentó y almacenó
   💬  Consultar       → envía preguntas a los agentes Flowise / Python
 
-El backend FastAPI debe estar corriendo en http://localhost:8000
+Esta versión ejecuta el backend FastAPI EN EL MISMO PROCESO usando
+`FastAPI.TestClient`. No requiere `python main.py` por separado: ideal
+para Streamlit Cloud donde no hay manera de levantar un segundo servicio.
 """
 
-import time
-import requests
+# ─────────────────────────────────────────────
+#  BOOTSTRAP: inyectar st.secrets en os.environ
+#  (DEBE ir antes de importar app.config o cualquier módulo del backend)
+# ─────────────────────────────────────────────
+import os
 import streamlit as st
+
+try:
+    _secrets = dict(st.secrets)
+    for _k, _v in _secrets.items():
+        if isinstance(_v, (str, int, float, bool)):
+            os.environ.setdefault(_k, str(_v))
+except Exception:
+    # Sin secrets.toml ni Secrets en Streamlit Cloud → caemos al .env local
+    pass
+
+import time
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from fastapi.testclient import TestClient
+
 
 # ─────────────────────────────────────────────
-#  CONFIGURACIÓN GLOBAL
+#  BACKEND EN-PROCESO (FastAPI vía TestClient)
 # ─────────────────────────────────────────────
-API_BASE = "http://localhost:8000/api/v1"
+@st.cache_resource(show_spinner="⏳ Iniciando backend en-proceso (puede tardar ~30s la primera vez: descarga del modelo de embeddings)…")
+def get_backend_client() -> TestClient:
+    """
+    Levanta la app FastAPI dentro del proceso de Streamlit y devuelve un
+    TestClient. El `__enter__` dispara el lifespan (inicializa ChromaDB y
+    descarga/carga el modelo `multilingual-e5-small`).
+
+    @st.cache_resource garantiza que esto solo se ejecute una vez por sesión.
+    """
+    from main import app
+    client = TestClient(app)
+    client.__enter__()  # dispara lifespan (init ChromaDB + embeddings)
+    return client
 
 SECTION_COLORS = {
     "resumen":              "#4CAF50",
@@ -68,11 +98,18 @@ SECTION_LABELS = {
 
 
 # ─────────────────────────────────────────────
-#  HELPERS DE API
+#  HELPERS DE API (llaman al backend en-proceso via TestClient)
 # ─────────────────────────────────────────────
+API_PREFIX = "/api/v1"
+
+
+def _client() -> TestClient:
+    return get_backend_client()
+
+
 def api_health():
     try:
-        r = requests.get(f"{API_BASE}/health", timeout=5)
+        r = _client().get(f"{API_PREFIX}/health")
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
@@ -80,7 +117,7 @@ def api_health():
 
 def api_collection_info():
     try:
-        r = requests.get(f"{API_BASE}/collection", timeout=5)
+        r = _client().get(f"{API_PREFIX}/collection")
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
@@ -88,10 +125,9 @@ def api_collection_info():
 
 def api_upload_pdf(file_bytes, filename):
     try:
-        r = requests.post(
-            f"{API_BASE}/upload-pdf",
+        r = _client().post(
+            f"{API_PREFIX}/upload-pdf",
             files={"file": (filename, file_bytes, "application/pdf")},
-            timeout=120,
         )
         return r.json(), r.status_code
     except Exception as e:
@@ -100,7 +136,7 @@ def api_upload_pdf(file_bytes, filename):
 
 def api_list_chunks(limit=50, offset=0):
     try:
-        r = requests.get(f"{API_BASE}/chunks", params={"limit": limit, "offset": offset}, timeout=10)
+        r = _client().get(f"{API_PREFIX}/chunks", params={"limit": limit, "offset": offset})
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
@@ -111,26 +147,17 @@ def api_query(question, top_k=5, session_id=None):
     if session_id:
         payload["session_id"] = session_id
     try:
-        # Timeout generoso: el pipeline puede tardar ~90s (Flowise) + ~120s
-        # (fallback Python con 6 agentes) + ~45s (texto sugerido). Si Groq
-        # está throttling (429), los reintentos suman aún más. 600 s = 10 min.
-        r = requests.post(f"{API_BASE}/query", json=payload, timeout=600)
+        # El TestClient ejecuta el handler en el mismo proceso (sin red), así que
+        # no hay timeout de socket: bloquea hasta que el pipeline termine.
+        r = _client().post(f"{API_PREFIX}/query", json=payload)
         return r.json(), r.status_code
-    except requests.exceptions.ReadTimeout:
-        return {
-            "detail": (
-                "El backend tardó más de 10 minutos en responder. "
-                "Probablemente Groq está throttling (límite TPM). "
-                "Espera 1 min y vuelve a intentar, o reduce Top-K en parámetros avanzados."
-            )
-        }, 504
     except Exception as e:
         return {"detail": str(e)}, 500
 
 
 def api_reset_collection():
     try:
-        r = requests.delete(f"{API_BASE}/collection", params={"confirm": "true"}, timeout=10)
+        r = _client().delete(f"{API_PREFIX}/collection", params={"confirm": "true"})
         return r.json(), r.status_code
     except Exception as e:
         return {"detail": str(e)}, 500
@@ -143,8 +170,8 @@ def render_health_badge():
     """Muestra estado del sistema en la barra lateral."""
     health = api_health()
     if health is None:
-        st.sidebar.error("⛔ Backend desconectado")
-        st.sidebar.caption(f"Asegúrate de que FastAPI esté en {API_BASE}")
+        st.sidebar.error("⛔ Backend no inicializado")
+        st.sidebar.caption("Recarga la página; si persiste, revisa los Secrets en Streamlit Cloud.")
         return False
 
     comps = health.get("components", {})
@@ -809,9 +836,14 @@ def main():
     if not backend_ok:
         st.error(
             "### ⛔ Backend no disponible\n\n"
-            f"No se pudo conectar con `{API_BASE}`.\n\n"
-            "**Solución:** abre una terminal en la carpeta del proyecto y ejecuta:\n"
-            "```bash\npython main.py\n```"
+            "El backend FastAPI corre embebido dentro de esta misma app Streamlit, "
+            "pero falló al inicializar.\n\n"
+            "**Causas comunes:**\n"
+            "- Faltan **Secrets** en Streamlit Cloud (Settings → Secrets). "
+            "Copia el contenido de `.streamlit/secrets.toml` allí.\n"
+            "- Primera carga: el modelo `multilingual-e5-small` (~470 MB) se está descargando — "
+            "espera ~30 s y recarga.\n"
+            "- Memoria insuficiente: el modelo necesita ~500 MB libres."
         )
         return
 

@@ -8,6 +8,9 @@
 .env.*.local
 # .env.example  ← sí se sube: sirve como plantilla para otros devs
 
+# ----- Streamlit: secrets locales -----
+.streamlit/secrets.toml
+
 # ----- Python: bytecode y caché -----
 __pycache__/
 *.py[cod]
