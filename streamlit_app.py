@@ -1,0 +1,803 @@
+"""
+🎓 Evaluador de Proyecto de Investigación — Interfaz Streamlit
+==========================================
+Interfaz visual de 3 pantallas para el POC RAG Multiagente:
+
+  📄  Cargar PDF      → sube y procesa el PDF del proyecto de investigación
+  🔬  Ver Embeddings  → visualiza cómo el PDF se fragmentó y almacenó
+  💬  Consultar       → envía preguntas a los agentes Flowise / Python
+
+El backend FastAPI debe estar corriendo en http://localhost:8000
+"""
+
+import time
+import requests
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+# ─────────────────────────────────────────────
+#  CONFIGURACIÓN GLOBAL
+# ─────────────────────────────────────────────
+API_BASE = "http://localhost:8000/api/v1"
+
+SECTION_COLORS = {
+    "resumen":              "#4CAF50",
+    "introduccion":         "#2196F3",
+    "planteamiento_problema":"#F44336",
+    "justificacion":        "#FF9800",
+    "objetivos":            "#9C27B0",
+    "hipotesis":            "#E91E63",
+    "antecedentes":         "#00BCD4",
+    "estado_del_arte":      "#009688",
+    "marco_teorico":        "#3F51B5",
+    "marco_conceptual":     "#673AB7",
+    "marco_metodologico":   "#795548",
+    "metodologia":          "#607D8B",
+    "diseno_investigacion": "#FF5722",
+    "resultados":           "#8BC34A",
+    "analisis":             "#FFC107",
+    "discusion":            "#03A9F4",
+    "conclusiones":         "#4DB6AC",
+    "referencias":          "#90A4AE",
+    "general":              "#BDBDBD",
+}
+
+SECTION_LABELS = {
+    "resumen":               "Resumen",
+    "introduccion":          "Introducción",
+    "planteamiento_problema":"Planteamiento del Problema",
+    "justificacion":         "Justificación",
+    "objetivos":             "Objetivos",
+    "hipotesis":             "Hipótesis",
+    "antecedentes":          "Antecedentes",
+    "estado_del_arte":       "Estado del Arte",
+    "marco_teorico":         "Marco Teórico",
+    "marco_conceptual":      "Marco Conceptual",
+    "marco_metodologico":    "Marco Metodológico",
+    "metodologia":           "Metodología",
+    "diseno_investigacion":  "Diseño de Investigación",
+    "resultados":            "Resultados",
+    "analisis":              "Análisis",
+    "discusion":             "Discusión",
+    "conclusiones":          "Conclusiones",
+    "referencias":           "Referencias",
+    "general":               "General / Sin clasificar",
+}
+
+
+# ─────────────────────────────────────────────
+#  HELPERS DE API
+# ─────────────────────────────────────────────
+def api_health():
+    try:
+        r = requests.get(f"{API_BASE}/health", timeout=5)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def api_collection_info():
+    try:
+        r = requests.get(f"{API_BASE}/collection", timeout=5)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def api_upload_pdf(file_bytes, filename):
+    try:
+        r = requests.post(
+            f"{API_BASE}/upload-pdf",
+            files={"file": (filename, file_bytes, "application/pdf")},
+            timeout=120,
+        )
+        return r.json(), r.status_code
+    except Exception as e:
+        return {"detail": str(e)}, 500
+
+
+def api_list_chunks(limit=50, offset=0):
+    try:
+        r = requests.get(f"{API_BASE}/chunks", params={"limit": limit, "offset": offset}, timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def api_query(question, top_k=5, session_id=None):
+    payload = {"question": question, "top_k": top_k}
+    if session_id:
+        payload["session_id"] = session_id
+    try:
+        r = requests.post(f"{API_BASE}/query", json=payload, timeout=180)
+        return r.json(), r.status_code
+    except Exception as e:
+        return {"detail": str(e)}, 500
+
+
+def api_reset_collection():
+    try:
+        r = requests.delete(f"{API_BASE}/collection", params={"confirm": "true"}, timeout=10)
+        return r.json(), r.status_code
+    except Exception as e:
+        return {"detail": str(e)}, 500
+
+
+# ─────────────────────────────────────────────
+#  COMPONENTES REUTILIZABLES
+# ─────────────────────────────────────────────
+def render_health_badge():
+    """Muestra estado del sistema en la barra lateral."""
+    health = api_health()
+    if health is None:
+        st.sidebar.error("⛔ Backend desconectado")
+        st.sidebar.caption(f"Asegúrate de que FastAPI esté en {API_BASE}")
+        return False
+
+    comps = health.get("components", {})
+    chroma_chunks = comps.get("chromadb", {}).get("chunks_stored", 0)
+    flowise_ok = comps.get("flowise", {}).get("reachable", False)
+    mode = health.get("execution_mode", "?")
+
+    st.sidebar.success("✅ Backend conectado")
+    st.sidebar.metric("Chunks en ChromaDB", chroma_chunks)
+
+    flowise_status = "🟢 Activo" if flowise_ok else "🔴 Sin conexión"
+    st.sidebar.caption(f"Flowise: {flowise_status}")
+    st.sidebar.caption(f"Modo: **{mode}**")
+    return True
+
+
+def section_badge(section_key: str) -> str:
+    label = SECTION_LABELS.get(section_key, section_key)
+    color = SECTION_COLORS.get(section_key, "#BDBDBD")
+    return f'<span style="background:{color};color:white;padding:2px 8px;border-radius:12px;font-size:0.75em;font-weight:600">{label}</span>'
+
+
+# ─────────────────────────────────────────────
+#  PANTALLA 1 — CARGAR PDF
+# ─────────────────────────────────────────────
+def page_upload():
+    st.header("📄 Cargar PDF de Proyecto de Investigación")
+    st.markdown(
+        "Sube el PDF de tu proyecto de investigación. El sistema lo procesará automáticamente: "
+        "extrae el texto, lo divide en fragmentos semánticos *(chunks)*, "
+        "genera los embeddings y los almacena en **ChromaDB**."
+    )
+
+    # ── Info de colección actual ──────────────────────────────────────────
+    col_info = api_collection_info()
+    if col_info and col_info.get("total_chunks", 0) > 0:
+        total = col_info["total_chunks"]
+        st.info(
+            f"📚 Ya hay **{total} fragmentos** almacenados en ChromaDB "
+            f"(colección: `{col_info.get('collection', '?')}`). "
+            "Puedes subir otro PDF para añadir más, o usar el botón de reinicio abajo."
+        )
+
+    # ── Uploader ──────────────────────────────────────────────────────────
+    uploaded = st.file_uploader(
+        "Arrastra o selecciona tu PDF aquí",
+        type=["pdf"],
+        help="Máximo 50 MB. Solo se aceptan PDFs con texto (no escaneados).",
+    )
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        chunk_size = st.slider("Tamaño de chunk (caracteres)", 300, 1500, 800, 50,
+                               help="Número máximo de caracteres por fragmento.")
+    with col2:
+        top_k = st.number_input("Overlap", 0, 500, 150, 25,
+                                help="Solapamiento entre chunks consecutivos.")
+
+    if uploaded is not None:
+        st.markdown(f"**Archivo:** `{uploaded.name}` — `{uploaded.size / 1024:.1f} KB`")
+
+        if st.button("🚀 Procesar PDF y guardar en ChromaDB", type="primary", use_container_width=True):
+            with st.spinner("Procesando PDF… puede tardar unos segundos según el tamaño."):
+                t0 = time.time()
+                result, status = api_upload_pdf(uploaded.read(), uploaded.name)
+                elapsed = round(time.time() - t0, 1)
+
+            if status == 200 and result.get("success"):
+                st.success(f"✅ PDF procesado en {elapsed} s")
+                st.balloons()
+
+                # Métricas principales
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Páginas", result["total_pages"])
+                m2.metric("Chunks generados", result["chunks_generated"])
+                m3.metric("Chunks almacenados", result["chunks_stored"])
+                m4.metric("Tamaño", f"{result['file_size_mb']} MB")
+
+                # Distribución de secciones detectadas
+                sections = result.get("sections_found", {})
+                if sections:
+                    st.subheader("📊 Secciones académicas detectadas")
+                    df_sec = pd.DataFrame(
+                        [
+                            {
+                                "Sección": SECTION_LABELS.get(k, k),
+                                "Chunks": v,
+                                "key": k,
+                            }
+                            for k, v in sorted(sections.items(), key=lambda x: -x[1])
+                        ]
+                    )
+                    colors = [SECTION_COLORS.get(row["key"], "#BDBDBD") for _, row in df_sec.iterrows()]
+                    fig = px.bar(
+                        df_sec,
+                        x="Chunks",
+                        y="Sección",
+                        orientation="h",
+                        color="Sección",
+                        color_discrete_sequence=colors,
+                        title="Distribución de chunks por sección",
+                    )
+                    fig.update_layout(showlegend=False, height=max(300, len(sections) * 28))
+                    st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown(f"> {result.get('message', '')}")
+                st.info("💡 Ve a **🔬 Ver Embeddings** para explorar los fragmentos, o a **💬 Consultar** para evaluar el proyecto de investigación.")
+            else:
+                st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
+
+    # ── Zona peligrosa — reiniciar colección ─────────────────────────────
+    with st.expander("⚠️ Zona peligrosa — Reiniciar ChromaDB"):
+        st.warning("Esta acción **borrará todos los fragmentos** almacenados. Es irreversible.")
+        if st.button("🗑️ Borrar toda la colección", type="secondary"):
+            res, status = api_reset_collection()
+            if status == 200:
+                st.success(res.get("message", "Colección reiniciada."))
+                st.rerun()
+            else:
+                st.error(res.get("detail", "Error al reiniciar."))
+
+
+# ─────────────────────────────────────────────
+#  PANTALLA 2 — VER EMBEDDINGS
+# ─────────────────────────────────────────────
+def page_embeddings():
+    st.header("🔬 Visualizar Embeddings y Chunks")
+    st.markdown(
+        "Explora cómo el PDF fue fragmentado y cómo está representado en **ChromaDB**. "
+        "Cada *chunk* es un fragmento de texto convertido en un vector de alta dimensión "
+        "que permite la búsqueda semántica."
+    )
+
+    col_info = api_collection_info()
+    if col_info is None:
+        st.error("No se puede conectar con el backend. Verifica que FastAPI esté corriendo.")
+        return
+
+    total = col_info.get("total_chunks", 0)
+    if total == 0:
+        st.warning("⚠️ No hay chunks almacenados. Sube primero un PDF en **📄 Cargar PDF**.")
+        return
+
+    # ── KPIs de colección ────────────────────────────────────────────────
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Total de chunks", total)
+    k2.metric("Colección", col_info.get("collection", "—"))
+    k3.metric("Directorio ChromaDB", col_info.get("persist_dir", "—"))
+
+    # ── Cargar muestra de chunks ─────────────────────────────────────────
+    limit = st.slider("Chunks a cargar para análisis", 10, 100, 50, 10)
+    chunks_data = api_list_chunks(limit=limit, offset=0)
+    if chunks_data is None:
+        st.error("Error al obtener chunks del backend.")
+        return
+
+    chunks = chunks_data.get("chunks", [])
+    if not chunks:
+        st.warning("No se pudieron obtener chunks.")
+        return
+
+    # Construir dataframe
+    rows = []
+    for i, c in enumerate(chunks):
+        meta = c.get("metadata", {})
+        rows.append({
+            "idx": i + 1,
+            "chunk_id": meta.get("chunk_id", f"chunk_{i}"),
+            "source": meta.get("source", "—"),
+            "page": meta.get("page", "—"),
+            "section": meta.get("section_detected", "general"),
+            "section_label": SECTION_LABELS.get(meta.get("section_detected", "general"), "general"),
+            "char_count": meta.get("char_count", len(c.get("preview", ""))),
+            "preview": c.get("preview", ""),
+        })
+    df = pd.DataFrame(rows)
+
+    # ── Gráfico 1: distribución de secciones (donut) ────────────────────
+    st.subheader("🗂️ Distribución por sección académica")
+    sec_counts = df.groupby("section_label")["idx"].count().reset_index()
+    sec_counts.columns = ["Sección", "Chunks"]
+    sec_counts = sec_counts.sort_values("Chunks", ascending=False)
+
+    col_pie, col_bar = st.columns([1, 1])
+    with col_pie:
+        fig_pie = px.pie(
+            sec_counts,
+            values="Chunks",
+            names="Sección",
+            hole=0.4,
+            title="Proporción de chunks",
+        )
+        fig_pie.update_traces(textposition="inside", textinfo="percent+label")
+        fig_pie.update_layout(showlegend=False, height=380)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col_bar:
+        fig_bar = px.bar(
+            sec_counts,
+            x="Chunks",
+            y="Sección",
+            orientation="h",
+            color="Sección",
+            title="Chunks por sección",
+        )
+        fig_bar.update_layout(showlegend=False, height=380)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ── Gráfico 2: tamaño de chunks ──────────────────────────────────────
+    st.subheader("📏 Distribución del tamaño de chunks")
+    col_hist, col_scatter = st.columns([1, 1])
+
+    with col_hist:
+        fig_hist = px.histogram(
+            df,
+            x="char_count",
+            nbins=20,
+            title="Histograma de tamaños (caracteres)",
+            labels={"char_count": "Caracteres por chunk"},
+            color_discrete_sequence=["#2196F3"],
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+    with col_scatter:
+        fig_scatter = px.scatter(
+            df,
+            x="idx",
+            y="char_count",
+            color="section_label",
+            title="Tamaño por posición en el documento",
+            labels={"idx": "Posición (chunk #)", "char_count": "Caracteres", "section_label": "Sección"},
+            hover_data=["page", "chunk_id"],
+        )
+        fig_scatter.update_layout(height=380)
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    # ── Gráfico 3: chunks por página ────────────────────────────────────
+    st.subheader("📖 Chunks generados por página")
+    if "page" in df.columns:
+        page_counts = df.groupby("page")["idx"].count().reset_index()
+        page_counts.columns = ["Página", "Chunks"]
+        page_counts = page_counts.sort_values("Página")
+        fig_page = px.bar(
+            page_counts,
+            x="Página",
+            y="Chunks",
+            title="Número de chunks por página del PDF",
+            color="Chunks",
+            color_continuous_scale="Blues",
+        )
+        fig_page.update_layout(coloraxis_showscale=False, height=300)
+        st.plotly_chart(fig_page, use_container_width=True)
+
+    # ── Tabla interactiva de chunks ──────────────────────────────────────
+    st.subheader("📋 Explorador de chunks")
+
+    sections_available = ["Todas"] + sorted(df["section_label"].unique().tolist())
+    filter_sec = st.selectbox("Filtrar por sección:", sections_available)
+    search_text = st.text_input("🔎 Buscar en el texto del chunk:", "")
+
+    df_filtered = df.copy()
+    if filter_sec != "Todas":
+        df_filtered = df_filtered[df_filtered["section_label"] == filter_sec]
+    if search_text:
+        df_filtered = df_filtered[df_filtered["preview"].str.contains(search_text, case=False, na=False)]
+
+    st.caption(f"Mostrando {len(df_filtered)} de {len(df)} chunks cargados")
+
+    for _, row in df_filtered.iterrows():
+        color = SECTION_COLORS.get(row["section"], "#BDBDBD")
+        with st.expander(
+            f"#{row['idx']:03d} — Página {row['page']} — {row['char_count']} chars",
+            expanded=False,
+        ):
+            st.markdown(
+                f'**Sección:** {section_badge(row["section"])}  &nbsp;&nbsp;'
+                f'**ID:** `{row["chunk_id"]}`  &nbsp;&nbsp;'
+                f'**Fuente:** `{row["source"]}`',
+                unsafe_allow_html=True,
+            )
+            st.markdown("---")
+            st.markdown(f"```\n{row['preview']}\n```")
+
+
+# ─────────────────────────────────────────────
+#  RENDERIZADOR DE RESPUESTA FLOWISE
+# ─────────────────────────────────────────────
+def render_flowise_answer(answer_text: str):
+    """Convierte la respuesta JSON de Flowise en tarjetas visuales legibles."""
+    import json
+
+    # Intentar parsear como JSON
+    data = None
+    if isinstance(answer_text, str):
+        text = answer_text.strip()
+        # Quitar posibles bloques markdown ```json ... ```
+        if text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+
+    if not isinstance(data, dict):
+        # No es JSON estructurado → mostrarlo como markdown normal
+        st.markdown(answer_text)
+        return
+
+    # ── Cabecera: puntuación + nivel ──────────────────────────────────────
+    score  = data.get("puntuacion_general")
+    nivel  = data.get("nivel_tesis", "").capitalize()
+
+    NIVEL_COLOR = {
+        "excelente":   "🟢",
+        "muy bueno":   "🟢",
+        "bueno":       "🔵",
+        "aceptable":   "🟡",
+        "regular":     "🟠",
+        "deficiente":  "🔴",
+        "insuficiente":"🔴",
+    }
+    emoji_nivel = NIVEL_COLOR.get(nivel.lower(), "⚪")
+
+    col_score, col_nivel, col_spacer = st.columns([1, 1, 2])
+    if score is not None:
+        col_score.metric("📊 Puntuación general", f"{score} / 10")
+    if nivel:
+        col_nivel.markdown(
+            f"**Nivel de tesis**\n\n"
+            f"<span style='font-size:1.4em'>{emoji_nivel} {nivel}</span>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+
+    # ── Resumen ejecutivo ────────────────────────────────────────────────
+    resumen = data.get("resumen_ejecutivo")
+    if resumen:
+        st.info(f"📋 **Resumen ejecutivo**\n\n{resumen}")
+
+    # ── Mensaje pedagógico ───────────────────────────────────────────────
+    mensaje = data.get("mensaje_pedagogico")
+    if mensaje:
+        st.success(f"💬 **Retroalimentación pedagógica**\n\n{mensaje}")
+
+    # ── Puntos fuertes / Áreas de mejora ─────────────────────────────────
+    col_f, col_m = st.columns(2)
+
+    with col_f:
+        st.markdown("### ✅ Puntos fuertes")
+        puntos = data.get("puntos_fuertes", [])
+        if puntos:
+            for p in puntos:
+                st.markdown(f"- {p}")
+        else:
+            st.caption("No se registraron puntos fuertes.")
+
+    with col_m:
+        st.markdown("### ⚠️ Áreas de mejora")
+        areas = data.get("areas_mejora", [])
+        if areas:
+            for a in areas:
+                st.markdown(f"- {a}")
+        else:
+            st.caption("No se detectaron áreas de mejora.")
+
+    # ── Recomendaciones priorizadas ──────────────────────────────────────
+    recomendaciones = data.get("recomendaciones_priorizadas", [])
+    if recomendaciones:
+        st.markdown("### 🎯 Recomendaciones priorizadas")
+        for rec in sorted(recomendaciones, key=lambda r: r.get("prioridad", 99)):
+            prioridad     = rec.get("prioridad", "—")
+            recomendacion = rec.get("recomendacion", "")
+            justificacion = rec.get("justificacion", "")
+            with st.expander(f"**#{prioridad}** — {recomendacion}", expanded=prioridad == 1):
+                if justificacion:
+                    st.caption(f"💡 {justificacion}")
+
+    # ── Siguiente paso ───────────────────────────────────────────────────
+    siguiente = data.get("siguiente_paso")
+    if siguiente:
+        st.markdown("---")
+        st.warning(f"🚀 **Siguiente paso recomendado**\n\n{siguiente}")
+
+
+# ─────────────────────────────────────────────
+#  PANTALLA 3 — CONSULTAR AGENTES
+# ─────────────────────────────────────────────
+def page_query():
+    st.header("💬 Consultar Agentes")
+    st.markdown(
+        "Escribe tu pregunta o instrucción de evaluación. "
+        "El sistema recuperará los fragmentos más relevantes de ChromaDB "
+        "usando similitud semántica y los enviará a los **agentes Flowise** para que generen la evaluación."
+    )
+
+    # ── Verificar que hay datos ──────────────────────────────────────────
+    col_info = api_collection_info()
+    if col_info is None:
+        st.error("No se puede conectar con el backend.")
+        return
+
+    total = col_info.get("total_chunks", 0)
+    if total == 0:
+        st.warning("⚠️ No hay ningún proyecto de investigación cargado. Primero sube un PDF en **📄 Cargar PDF**.")
+        return
+
+    st.success(f"📚 ChromaDB tiene **{total} fragmentos** listos para consultar.")
+
+    # ── Formulario de consulta ───────────────────────────────────────────
+    examples = [
+        "Evalúa la formulación del problema de investigación",
+        "¿Es adecuado el marco metodológico del proyecto de investigación?",
+        "¿Qué debilidades tiene el marco teórico?",
+        "Analiza la coherencia entre los objetivos y las conclusiones",
+        "¿Las referencias bibliográficas son suficientes y actualizadas?",
+    ]
+
+    example_choice = st.selectbox(
+        "💡 Ejemplos de consulta (opcional):",
+        ["— Escribe tu propia pregunta —"] + examples,
+    )
+
+    default_question = "" if example_choice.startswith("—") else example_choice
+    question = st.text_area(
+        "Tu pregunta o instrucción:",
+        value=default_question,
+        height=100,
+        max_chars=2000,
+        placeholder="ej. Evalúa la formulación del problema de investigación...",
+    )
+
+    # ── Parámetros avanzados ─────────────────────────────────────────────
+    with st.expander("⚙️ Parámetros avanzados"):
+        top_k = st.slider(
+            "Top-K (fragmentos a recuperar de ChromaDB)",
+            min_value=1, max_value=20, value=5,
+            help="Cuántos fragmentos relevantes se le pasan al agente como contexto.",
+        )
+        session_id = st.text_input(
+            "Session ID (opcional)",
+            placeholder="p.ej. sesion-proyecto-2024",
+            help="Para mantener historial de conversación en Flowise.",
+        )
+
+    # ── Botón de envío ───────────────────────────────────────────────────
+    send = st.button(
+        "🚀 Enviar consulta a los agentes",
+        type="primary",
+        use_container_width=True,
+        disabled=len(question.strip()) < 5,
+    )
+
+    if len(question.strip()) > 0 and len(question.strip()) < 5:
+        st.caption("La pregunta debe tener al menos 5 caracteres.")
+
+    if send and len(question.strip()) >= 5:
+        with st.spinner("Los agentes están analizando el proyecto de investigación… esto puede tardar 30–120 segundos."):
+            t0 = time.time()
+            result, status = api_query(question.strip(), top_k=top_k, session_id=session_id or None)
+            elapsed = round(time.time() - t0, 1)
+
+        if status == 200:
+            # ── Métricas de la consulta ──────────────────────────────────
+            st.success(f"✅ Consulta completada en **{elapsed} s**")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Modo de ejecución", result.get("mode", "—"))
+            m2.metric("Chunks recuperados", result.get("chunks_retrieved", "—"))
+            m3.metric("Tiempo", f"{result.get('elapsed_seconds', elapsed)} s")
+
+            # ── Contexto recuperado (RAG) ────────────────────────────────
+            with st.expander("📖 Contexto recuperado de ChromaDB (RAG)", expanded=False):
+                st.markdown(
+                    "_Estos son los fragmentos del proyecto de investigación que el sistema consideró más relevantes "
+                    "para tu pregunta. Se enviaron como contexto a los agentes._"
+                )
+                context_preview = result.get("context_preview", "")
+                st.text_area("Contexto (preview):", value=context_preview, height=200, disabled=True)
+
+            # ── Respuesta de los agentes ─────────────────────────────────
+            st.subheader("🤖 Respuesta de los agentes")
+
+            raw_result = result.get("result", {})
+
+            # Flowise → resultado en raw_result["flowise_response"]
+            if "flowise_response" in raw_result:
+                flowise_resp = raw_result["flowise_response"]
+                # Flowise devuelve {"text": "...", ...}
+                if isinstance(flowise_resp, dict):
+                    answer_text = (
+                        flowise_resp.get("text")
+                        or flowise_resp.get("output")
+                        or flowise_resp.get("answer")
+                        or str(flowise_resp)
+                    )
+                else:
+                    answer_text = str(flowise_resp)
+
+                render_flowise_answer(answer_text)
+
+                # Mostrar metadata adicional de Flowise si existe (colapsado)
+                if isinstance(flowise_resp, dict) and len(flowise_resp) > 1:
+                    with st.expander("🔧 Ver payload completo de Flowise (debug)", expanded=False):
+                        st.json(flowise_resp)
+
+            # Agentes Python → cada agente tiene su clave
+            elif "agents" in raw_result or any(
+                k in raw_result for k in ["mentor_intake", "investigador", "auditor", "final"]
+            ):
+                st.markdown("_Resultado de los agentes Python secuenciales:_")
+                for agent_name, agent_output in raw_result.items():
+                    with st.expander(f"🤖 {agent_name.replace('_', ' ').title()}"):
+                        if isinstance(agent_output, str):
+                            st.markdown(agent_output)
+                        else:
+                            st.json(agent_output)
+
+            # Fallback — mostrar el JSON crudo
+            else:
+                st.json(raw_result)
+
+            # ── Texto sugerido ───────────────────────────────────────────
+            texto_sugerido   = raw_result.get("texto_sugerido")
+            original_context = raw_result.get("original_context", result.get("context_preview", ""))
+
+            if texto_sugerido:
+                st.markdown("---")
+                st.subheader("✏️ Texto sugerido para reemplazar esta sección")
+                st.markdown(
+                    "_Versión mejorada generada por los agentes. "
+                    "Incorpora las recomendaciones priorizadas y los hallazgos del "
+                    "**Agente Investigador**. Lista para copiar y pegar en tu tesis._"
+                )
+
+                col_orig, col_sug = st.columns(2, gap="medium")
+
+                with col_orig:
+                    st.markdown(
+                        "<p style='font-weight:600;color:#888'>📄 Texto original analizado</p>",
+                        unsafe_allow_html=True,
+                    )
+                    st.text_area(
+                        "original",
+                        value=original_context,
+                        height=380,
+                        disabled=True,
+                        label_visibility="collapsed",
+                    )
+
+                with col_sug:
+                    st.markdown(
+                        "<p style='font-weight:600;color:#2e7d32'>✨ Texto mejorado (sugerido)</p>",
+                        unsafe_allow_html=True,
+                    )
+                    st.text_area(
+                        "sugerido",
+                        value=texto_sugerido,
+                        height=380,
+                        label_visibility="collapsed",
+                        help="Selecciona todo el texto (Ctrl+A dentro del área) y copia.",
+                    )
+
+                st.caption(
+                    "💡 Este texto es una **sugerencia** basada en el análisis. "
+                    "Revísalo y adáptalo antes de incluirlo en tu tesis."
+                )
+
+            elif texto_sugerido is None and status == 200:
+                st.warning(
+                    "⚠️ **Texto sugerido no disponible** — el LLM para generarlo no está configurado.\n\n"
+                    "Abre el archivo `.env` y añade tu clave de Groq:\n"
+                    "```\nLLM_PROVIDER=groq\nGROQ_API_KEY=gsk_...\n```\n"
+                    "Obtén la clave gratis en [console.groq.com](https://console.groq.com) → API Keys. "
+                    "Luego **reinicia el backend** (`python main.py`)."
+                )
+
+            # ── Guardar en historial de sesión ───────────────────────────
+            if "query_history" not in st.session_state:
+                st.session_state["query_history"] = []
+            st.session_state["query_history"].append(
+                {
+                    "question": question.strip(),
+                    "elapsed": elapsed,
+                    "chunks_retrieved": result.get("chunks_retrieved"),
+                    "mode": result.get("mode"),
+                }
+            )
+
+        else:
+            st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
+            if status == 404:
+                st.info("Asegúrate de haber subido un PDF en **📄 Cargar PDF**.")
+            elif status == 502:
+                st.info(
+                    "Flowise no está respondiendo. Verifica que esté corriendo en "
+                    "`http://localhost:3000` y que el chatflow ID sea correcto."
+                )
+
+    # ── Historial de consultas ───────────────────────────────────────────
+    if st.session_state.get("query_history"):
+        st.markdown("---")
+        st.subheader("📜 Historial de consultas (esta sesión)")
+        hist_df = pd.DataFrame(st.session_state["query_history"])
+        hist_df.index = hist_df.index + 1
+        st.dataframe(hist_df, use_container_width=True)
+
+
+# ─────────────────────────────────────────────
+#  LAYOUT PRINCIPAL
+# ─────────────────────────────────────────────
+def main():
+    st.set_page_config(
+        page_title="Evaluador de Proyecto de Investigación — RAG Multiagente",
+        page_icon="🎓",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+
+    # ── Sidebar ──────────────────────────────────────────────────────────
+    with st.sidebar:
+        st.image(
+            "https://img.icons8.com/fluency/96/graduation-cap.png",
+            width=72,
+        )
+        st.title("🎓 Evaluador de Proyecto de Investigación")
+        st.caption("RAG Multiagente · FastAPI + Flowise")
+        st.markdown("---")
+
+        # Estado del backend
+        backend_ok = render_health_badge()
+
+        st.markdown("---")
+        page = st.radio(
+            "Navegar a:",
+            ["📄 Cargar PDF", "🔬 Ver Embeddings", "💬 Consultar"],
+            index=0,
+        )
+        st.markdown("---")
+        st.caption(
+            "**Stack técnico:**\n"
+            "- 🐍 FastAPI · Python\n"
+            "- 🧮 ChromaDB · embeddings\n"
+            "- 🤖 Flowise Agentflow\n"
+            "- 📐 multilingual-e5-small\n"
+        )
+
+    # ── Contenido principal ───────────────────────────────────────────────
+    if not backend_ok:
+        st.error(
+            "### ⛔ Backend no disponible\n\n"
+            f"No se pudo conectar con `{API_BASE}`.\n\n"
+            "**Solución:** abre una terminal en la carpeta del proyecto y ejecuta:\n"
+            "```bash\npython main.py\n```"
+        )
+        return
+
+    if page == "📄 Cargar PDF":
+        page_upload()
+    elif page == "🔬 Ver Embeddings":
+        page_embeddings()
+    elif page == "💬 Consultar":
+        page_query()
+
+
+if __name__ == "__main__":
+    main()

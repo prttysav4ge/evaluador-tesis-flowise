@@ -1,0 +1,46 @@
+# ============================================
+# POC: Evaluador de Tesis RAG Multiagente
+# ============================================
+
+# API Framework
+fastapi>=0.116.0      # 0.116+ es compatible con starlette>=1.0.x (requerido por streamlit 1.35+)
+starlette>=1.0.0      # streamlit 1.35+ requiere DEFAULT_EXCLUDED_CONTENT_TYPES (starlette 0.46+)
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# LangChain Core
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-text-splitters>=0.3.0
+
+# Ollama (opcional si usas Ollama en vez de OpenAI)
+# langchain-ollama>=0.2.0
+
+# Vector Store
+chromadb>=0.5.0
+
+# Embeddings
+sentence-transformers>=2.7.0
+
+# PDF Processing
+pypdf>=4.0.0
+
+# Config y HTTP
+python-dotenv>=1.0.0
+httpx>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.2.0
+
+# Utilidades
+numpy>=1.24.0
+
+# Interfaz visual (Streamlit)
+streamlit>=1.35.0
+plotly>=5.20.0
+pandas>=1.4.0
+
+# NOTA: ejecutar streamlit con:
+#   python -m streamlit run streamlit_app.py
+# en lugar de "streamlit run ..." (el exe puede no estar en el PATH)
