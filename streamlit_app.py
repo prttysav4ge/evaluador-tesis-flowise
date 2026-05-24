@@ -291,7 +291,12 @@ def api_reset_collection():
 #  COMPONENTES REUTILIZABLES
 # ─────────────────────────────────────────────
 def render_health_badge():
-    """Muestra estado del sistema en la barra lateral."""
+    """Muestra estado del sistema en la barra lateral (versión verbose, legacy).
+
+    DEPRECATED: reemplazada por render_health_badge_compact() dentro de
+    render_sidebar(). Se conserva por compatibilidad y para no romper
+    referencias durante el refactor del Sprint 1.
+    """
     health = api_health()
     if health is None:
         st.sidebar.error("⛔ Backend no inicializado")
@@ -310,6 +315,116 @@ def render_health_badge():
     st.sidebar.caption(f"Flowise: {flowise_status}")
     st.sidebar.caption(f"Modo: **{mode}**")
     return True
+
+
+def render_health_badge_compact() -> bool:
+    """Versión compacta del health badge — vive dentro de render_sidebar()."""
+    health = api_health()
+    if health is None:
+        st.error("⛔ Backend no inicializado")
+        st.caption("Revisa los Secrets en Streamlit Cloud.")
+        return False
+    comps = health.get("components", {})
+    flowise_ok = comps.get("flowise", {}).get("reachable", False)
+    mode = health.get("execution_mode", "?")
+    st.success(f"✅ Backend OK · `{mode}`")
+    st.caption(f"Flowise: {'🟢 activo' if flowise_ok else '🔴 sin conexión'}")
+    return True
+
+
+def render_sidebar() -> bool:
+    """
+    Sidebar persistente al estilo de la app de referencia:
+    header, estado del workflow, PDF activo, thread_id, rúbrica,
+    botones de reset y biblioteca metodológica (placeholder hasta Sprint 4).
+
+    Reemplaza el sidebar anterior basado en st.radio. La navegación
+    entre pantallas se decide por workflow_stage en main().
+
+    Returns:
+        bool — True si el backend está inicializado.
+    """
+    with st.sidebar:
+        # ── Header ────────────────────────────────────────────────────────
+        st.image(
+            "https://img.icons8.com/fluency/96/graduation-cap.png",
+            width=72,
+        )
+        st.title("🎓 Sistema de Mentoría Académica Multiagente")
+        st.caption("Flowise + RAG + Groq Llama 3.3")
+        st.markdown("---")
+
+        # ── Estado del backend (compacto) ────────────────────────────────
+        backend_ok = render_health_badge_compact()
+        st.markdown("---")
+
+        # ── Estado del workflow ───────────────────────────────────────────
+        badge_text, badge_emoji = workflow_stage_badge()
+        st.markdown(f"**Estado:** {badge_emoji} {badge_text}")
+
+        if st.session_state.get("pdf_uploaded"):
+            st.caption(f"📄 PDF: `{st.session_state['pdf_filename']}`")
+        st.caption(f"🧵 Thread: `{thread_id_short()}`")
+        st.markdown("---")
+
+        # ── Universidad / Rúbrica ────────────────────────────────────────
+        rubric_keys   = list(RUBRICS.keys())
+        rubric_labels = [RUBRICS[k]["label"] for k in rubric_keys]
+        current_idx   = rubric_keys.index(
+            st.session_state.get("rubric_id", rubric_keys[0])
+        )
+        chosen_label = st.selectbox(
+            "Universidad / Rúbrica",
+            options=rubric_labels,
+            index=current_idx,
+            key="_sidebar_rubric_select",
+        )
+        st.session_state["rubric_id"] = rubric_keys[
+            rubric_labels.index(chosen_label)
+        ]
+        st.markdown("---")
+
+        # ── Botones de reset ──────────────────────────────────────────────
+        col_new, col_section = st.columns(2)
+        with col_new:
+            if st.button(
+                "🔄 Nueva\nevaluación",
+                use_container_width=True,
+                help="Resetea PDF, configuración y resultados. Genera nuevo thread_id.",
+            ):
+                reset_all_state()
+                st.rerun()
+        with col_section:
+            section_btn_disabled = not st.session_state.get("pdf_uploaded", False)
+            if st.button(
+                "📑 Otra\nsección",
+                use_container_width=True,
+                disabled=section_btn_disabled,
+                help="Conserva el PDF vectorizado; sólo limpia el resultado.",
+            ):
+                reset_for_new_section()
+                st.rerun()
+        st.markdown("---")
+
+        # ── Biblioteca Metodológica (placeholder — Sprint 4) ─────────────
+        with st.expander("📚 Biblioteca Metodológica"):
+            st.caption(
+                "_Disponible en Sprint 4: libros metodológicos de referencia "
+                "(Hernández Sampieri, Tamayo y otros) preindexados para "
+                "enriquecer el contexto del análisis._"
+            )
+        st.markdown("---")
+
+        # ── Stack técnico (preservado) ───────────────────────────────────
+        st.caption(
+            "**Stack técnico:**\n"
+            "- 🐍 FastAPI · Python\n"
+            "- 🧮 ChromaDB · `multilingual-e5-small`\n"
+            "- 🤖 Flowise Agentflow\n"
+            "- ⚡ Groq · `llama-3.3-70b-versatile`\n"
+        )
+
+    return backend_ok
 
 
 def section_badge(section_key: str) -> str:
@@ -931,33 +1046,8 @@ def main():
     # Inicializa st.session_state (thread_id, workflow_stage, rubric, etc.)
     init_session_state()
 
-    # ── Sidebar ──────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.image(
-            "https://img.icons8.com/fluency/96/graduation-cap.png",
-            width=72,
-        )
-        st.title("🎓 Evaluador de Proyecto de Investigación")
-        st.caption("RAG Multiagente · FastAPI + Flowise")
-        st.markdown("---")
-
-        # Estado del backend
-        backend_ok = render_health_badge()
-
-        st.markdown("---")
-        page = st.radio(
-            "Navegar a:",
-            ["📄 Cargar PDF", "🔬 Ver Embeddings", "💬 Consultar"],
-            index=0,
-        )
-        st.markdown("---")
-        st.caption(
-            "**Stack técnico:**\n"
-            "- 🐍 FastAPI · Python\n"
-            "- 🧮 ChromaDB · embeddings\n"
-            "- 🤖 Flowise Agentflow\n"
-            "- 📐 multilingual-e5-small\n"
-        )
+    # ── Sidebar persistente (reemplaza el st.radio anterior) ─────────────
+    backend_ok = render_sidebar()
 
     # ── Contenido principal ───────────────────────────────────────────────
     if not backend_ok:
@@ -974,11 +1064,24 @@ def main():
         )
         return
 
-    if page == "📄 Cargar PDF":
+    # ── Bridge temporal hasta Commit 3 del Sprint 1 ──────────────────────
+    # Si ya hay chunks en ChromaDB pero el workflow está en STAGE_UPLOAD
+    # (ej. el usuario recargó la página tras subir el PDF), avanzamos al
+    # stage 'configure' para no devolverlo a la pantalla de carga. El
+    # próximo commit reemplaza este bridge con mark_pdf_uploaded() llamado
+    # explícitamente desde page_upload tras un upload exitoso.
+    if st.session_state["workflow_stage"] == STAGE_UPLOAD:
+        col_info = api_collection_info()
+        if col_info and col_info.get("total_chunks", 0) > 0:
+            st.session_state["workflow_stage"] = STAGE_CONFIGURE
+
+    # ── Dispatcher por workflow_stage ────────────────────────────────────
+    stage = st.session_state["workflow_stage"]
+    if stage == STAGE_UPLOAD:
         page_upload()
-    elif page == "🔬 Ver Embeddings":
+    elif stage == STAGE_EMBEDDINGS:
         page_embeddings()
-    elif page == "💬 Consultar":
+    else:  # STAGE_CONFIGURE | STAGE_RESULTS — ambos los renderiza page_query
         page_query()
 
 
