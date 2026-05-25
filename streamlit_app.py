@@ -30,6 +30,7 @@ except Exception:
 
 import time
 import uuid
+from typing import Any, Dict
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -129,6 +130,7 @@ _SESSION_KEYS_PDF = (
 _SESSION_KEYS_RESULT = (
     "last_result",
     "last_question",
+    "last_metrics",   # cache de métricas NLP (calculadas on-demand en Pestaña 4)
 )
 _SESSION_KEYS_CONFIG = (
     "thread_id",
@@ -948,124 +950,482 @@ def render_flowise_answer(answer_text: str):
 # ─────────────────────────────────────────────
 #  PANTALLA 3 — CONSULTAR AGENTES
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  Helpers de extracción de datos de la respuesta
+# ─────────────────────────────────────────────
+# Mapeo nombre-de-agente → etiqueta normalizada usada en los 6 agentes Python
+# y en los nodos del Agentflow Flowise (que comparten labels casi 1:1).
+_AGENT_LABEL_TO_KEY = {
+    "mentor intake":     "mentor_intake",
+    "supervisor":        "mentor_intake",   # alias futuro (Sprint 4 re-etiquetado)
+    "investigador":      "investigador",
+    "auditor":           "auditor",
+    "metodologico":      "metodologico",
+    "metodológico":      "metodologico",
+    "metodologo":        "metodologico",
+    "metodólogo":        "metodologico",
+    "redactor":          "redactor",
+    "mentor final":      "mentor_final",
+    "sintesis":          "mentor_final",
+    "síntesis":          "mentor_final",
+    "sintesis y consenso": "mentor_final",
+}
+
+
+def _parse_maybe_json(text: Any) -> Any:
+    """Intenta parsear text como JSON; si falla, lo devuelve tal cual."""
+    if not isinstance(text, str):
+        return text
+    import json as _json
+
+    # Quitar code fences ``` o ```json
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    try:
+        return _json.loads(cleaned)
+    except Exception:
+        return text
+
+
+def _extract_agent_outputs(raw_result: dict) -> dict:
+    """
+    Devuelve un dict { 'mentor_intake': {...}, 'investigador': {...}, ... }
+    con la salida parseada de cada uno de los 6 agentes, normalizando los
+    dos modos:
+
+      - Flowise: lee de raw_result['flowise_response']['agentFlowExecutedData']
+                 cada nodo y matchea su nodeLabel contra _AGENT_LABEL_TO_KEY.
+      - Python agentes: lee de raw_result['memory'][*] directamente.
+
+    Para agentes ausentes, la key queda con dict vacío {}.
+    """
+    outputs: Dict[str, Any] = {k: {} for k in
+        ["mentor_intake", "investigador", "auditor", "metodologico", "redactor", "mentor_final"]
+    }
+
+    # ── Modo Python agentes ──────────────────────────────────────────────
+    memory = raw_result.get("memory", {})
+    if isinstance(memory, dict) and memory:
+        for k in outputs.keys():
+            if k in memory:
+                outputs[k] = memory[k] if isinstance(memory[k], dict) else _parse_maybe_json(memory[k])
+        return outputs
+
+    # ── Modo Flowise ─────────────────────────────────────────────────────
+    flowise_resp = raw_result.get("flowise_response", {})
+    if not isinstance(flowise_resp, dict):
+        return outputs
+
+    exec_data = flowise_resp.get("agentFlowExecutedData", []) or []
+    for node in exec_data:
+        if not isinstance(node, dict):
+            continue
+        label = (node.get("nodeLabel") or node.get("label") or "").strip().lower()
+        key   = _AGENT_LABEL_TO_KEY.get(label)
+        if not key:
+            continue
+        content = (
+            node.get("data", {})
+                .get("output", {})
+                .get("content", "")
+        )
+        parsed = _parse_maybe_json(content)
+        if parsed:
+            outputs[key] = parsed if isinstance(parsed, dict) else {"raw_output": parsed}
+
+    # Si no obtuvimos nada del execution tree, al menos rescatamos el output
+    # del Mentor Final desde flowise_response['text'] (el formato actual del End node).
+    if not outputs["mentor_final"]:
+        outputs["mentor_final"] = _parse_maybe_json(
+            flowise_resp.get("text") or flowise_resp.get("output") or {}
+        ) or {}
+
+    return outputs
+
+
+def _extract_score(final_data: dict) -> float:
+    """Extrae puntuación general 0-10 del output del Mentor Final."""
+    if not isinstance(final_data, dict):
+        return 0.0
+    val = (
+        final_data.get("puntuacion_general")
+        or final_data.get("puntuacion")
+        or final_data.get("score")
+        or 0
+    )
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# ─────────────────────────────────────────────
+#  Render de cada pestaña
+# ─────────────────────────────────────────────
+
+def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> None:
+    """Pestaña 1 — Evaluación: texto final, feedback auditor, recomendaciones."""
+    texto_sugerido   = raw_result.get("texto_sugerido")
+    original_context = raw_result.get("original_context", "")
+
+    # ── Texto final (sugerido por Redactor / Mentor Final) ──────────────
+    st.subheader("✏️ Texto final (versión mejorada)")
+    if texto_sugerido:
+        col_orig, col_sug = st.columns(2, gap="medium")
+        with col_orig:
+            st.markdown(
+                "<p style='font-weight:600;color:#888'>📄 Texto original</p>",
+                unsafe_allow_html=True,
+            )
+            st.text_area("original", value=original_context, height=320,
+                         disabled=True, label_visibility="collapsed")
+        with col_sug:
+            st.markdown(
+                "<p style='font-weight:600;color:#2e7d32'>✨ Texto sugerido</p>",
+                unsafe_allow_html=True,
+            )
+            st.text_area("sugerido", value=texto_sugerido, height=320,
+                         label_visibility="collapsed",
+                         help="Selecciona todo (Ctrl+A) y copia.")
+    else:
+        st.info(
+            "Texto sugerido no disponible. Verifica que `GROQ_API_KEY` esté "
+            "configurada en `.streamlit/secrets.toml`."
+        )
+
+    # ── Feedback del Auditor ─────────────────────────────────────────────
+    auditor = agents.get("auditor", {})
+    if auditor:
+        st.subheader("🔍 Feedback del Auditor")
+        # El auditor puede devolver varios campos; mostramos comentario + flags + sugerencias
+        comentario = auditor.get("comentario") or auditor.get("evaluacion") or ""
+        if comentario:
+            st.markdown(comentario)
+        sugs = auditor.get("sugerencias", []) or auditor.get("recomendaciones", [])
+        if sugs:
+            st.markdown("**Sugerencias del Auditor:**")
+            for s in sugs:
+                st.markdown(f"- {s}")
+        flags = auditor.get("flags", []) or auditor.get("issues", [])
+        if flags:
+            st.warning("⚠️ Flags detectados: " + ", ".join(map(str, flags)))
+
+    # ── Expander: ¿Qué recomendaría el Redactor? ────────────────────────
+    redactor = agents.get("redactor", {})
+    if redactor:
+        with st.expander("✍️ ¿Qué recomendaría el Redactor?"):
+            comentario = redactor.get("comentario") or redactor.get("recomendacion") or ""
+            if comentario:
+                st.markdown(comentario)
+            if not comentario:
+                st.json(redactor)
+
+    # ── Recomendaciones generales (Metodológico + Mentor Final) ─────────
+    st.subheader("🎯 Recomendaciones generales")
+    metodo = agents.get("metodologico", {})
+    metodo_recs = metodo.get("recomendaciones", []) or metodo.get("sugerencias", [])
+    final_recs  = final_data.get("recomendaciones_priorizadas", []) or \
+                  final_data.get("recomendaciones", [])
+
+    if metodo_recs:
+        st.markdown("**Del Metodólogo:**")
+        for r in metodo_recs:
+            st.markdown(f"- {r}")
+
+    if final_recs:
+        st.markdown("**Priorizadas (del Mentor Final):**")
+        for rec in sorted(final_recs, key=lambda r: r.get("prioridad", 99) if isinstance(r, dict) else 99):
+            if isinstance(rec, dict):
+                pri = rec.get("prioridad", "—")
+                txt = rec.get("recomendacion", "")
+                jus = rec.get("justificacion", "")
+                with st.expander(f"**#{pri}** — {txt}", expanded=pri == 1):
+                    if jus:
+                        st.caption(f"💡 {jus}")
+            else:
+                st.markdown(f"- {rec}")
+
+    if not (metodo_recs or final_recs):
+        st.caption("Sin recomendaciones explícitas en esta evaluación.")
+
+
+def _render_tab_debate(agents: dict, final_data: dict) -> None:
+    """
+    Pestaña 2 — Debate (mapeo provisional con los 6 agentes actuales).
+
+    Hasta Sprint 4 los nodos no producen Consenso/Disenso explícitos, por
+    lo que mapeamos:
+      - Perspectiva Formal       = Auditor
+      - Perspectiva Metodológica = Metodológico
+      - Perspectiva Contextual   = Investigador
+      - Síntesis                 = Mentor Final
+    """
+    st.caption(
+        "_Mapeo provisional desde los 6 agentes actuales. Consenso/Disenso "
+        "explícitos llegan al rediseñar agentes (Sprint 4)._"
+    )
+
+    perspectives = [
+        ("📐 Perspectiva Formal",       agents.get("auditor",       {}), "rigor académico, normas, citas"),
+        ("🧪 Perspectiva Metodológica", agents.get("metodologico",  {}), "diseño, instrumentos, validez"),
+        ("🔬 Perspectiva Contextual",   agents.get("investigador",  {}), "antecedentes, estado del arte"),
+        ("🧭 Síntesis",                  agents.get("mentor_final",  {}) or final_data, "integración del debate"),
+    ]
+
+    for label, data, hint in perspectives:
+        with st.expander(label, expanded=False):
+            st.caption(f"_{hint}_")
+            if not data:
+                st.caption("— Sin output disponible.")
+                continue
+            comentario = (
+                data.get("comentario")
+                or data.get("evaluacion")
+                or data.get("evaluacion_inicial")
+                or data.get("mensaje_pedagogico")
+                or data.get("resumen_ejecutivo")
+                or ""
+            )
+            if comentario:
+                st.markdown(comentario)
+            else:
+                st.json(data)
+
+    st.markdown("---")
+    st.markdown("**🟢 Consenso**")
+    st.caption("_Disponible al rediseñar agentes (Sprint 4 — re-etiquetado del Mentor Final como 'Síntesis y Consenso')._")
+    st.markdown("**🔴 Disenso**")
+    st.caption("_Disponible al rediseñar agentes (Sprint 4)._")
+
+
+def _render_tab_rag(result: dict) -> None:
+    """Pestaña 3 — Contexto RAG con sub-pestañas (libros y cruzado en Sprint 4)."""
+    sub_tesis, sub_libros, sub_cruzado = st.tabs([
+        "📄 Del PDF de tesis",
+        "📚 De libros de referencia",
+        "🔗 Contexto cruzado",
+    ])
+
+    with sub_tesis:
+        context = result.get("context_preview", "")
+        if context:
+            st.caption(f"Fragmentos recuperados: **{result.get('chunks_retrieved', '—')}**")
+            st.text_area("contexto_tesis", value=context, height=320, disabled=True,
+                         label_visibility="collapsed")
+        else:
+            st.info("No hay contexto recuperado disponible en este resultado.")
+
+    with sub_libros:
+        st.caption(
+            "_Disponible en Sprint 4: indexamos los libros metodológicos "
+            "(Hernández Sampieri y otros) y mostramos los fragmentos relevantes._"
+        )
+
+    with sub_cruzado:
+        st.caption(
+            "_Disponible en Sprint 4: pasajes del PDF que se contrastan con "
+            "principios de los libros de referencia._"
+        )
+
+
+def _render_tab_reportes(
+    question: str,
+    result: dict,
+    agents: dict,
+    final_data: dict,
+) -> None:
+    """Pestaña 4 — Reportes (métricas NLP + 3 descargas)."""
+    import json as _json
+
+    # ── Métricas NLP ─────────────────────────────────────────────────────
+    st.subheader("📊 Métricas NLP")
+    st.caption(
+        "Comparan el _texto original_ analizado vs el _texto sugerido_ "
+        "(reescritura propuesta por el pipeline)."
+    )
+
+    texto_sugerido   = result.get("result", {}).get("texto_sugerido")
+    original_context = result.get("result", {}).get("original_context", "") \
+        or result.get("context_preview", "")
+
+    metrics = st.session_state.get("last_metrics")
+
+    if not texto_sugerido or not original_context:
+        st.info("Las métricas requieren texto original + sugerido. No hay datos suficientes.")
+    elif metrics is None:
+        if st.button("🧮 Calcular métricas NLP", type="primary"):
+            with st.spinner("Calculando ROUGE / BLEU / similitud coseno…"):
+                from services.metrics_service import compute_all
+                score = _extract_score(final_data)
+                # Sin "score_before" real, usamos 5.0 como baseline neutral.
+                # Cuando Sprint 4 entregue iteración previa, lo cambiamos.
+                metrics = compute_all(
+                    reference=original_context,
+                    hypothesis=texto_sugerido,
+                    score_before=5.0,
+                    score_after=score,
+                )
+                st.session_state["last_metrics"] = metrics
+                st.rerun()
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("ROUGE-1",      _fmt(metrics.get("rouge1")))
+        m2.metric("ROUGE-2",      _fmt(metrics.get("rouge2")))
+        m3.metric("ROUGE-L",      _fmt(metrics.get("rougeL")))
+        m4.metric("BLEU",         _fmt(metrics.get("bleu")))
+        m5, m6, m7, m8 = st.columns(4)
+        m5.metric("Cos sim",      _fmt(metrics.get("cosine_similarity")))
+        m6.metric("Gain Score",   _fmt(metrics.get("gain_score")))
+        m7.metric("Kappa",        _fmt(metrics.get("kappa")))
+        m8.metric("Puntaje 0-10", f"{_extract_score(final_data):.1f}")
+        if metrics.get("kappa") is None:
+            st.caption("_Kappa: requiere 2 evaluaciones — habilitable cuando Sprint 4 active iteraciones múltiples._")
+
+    st.markdown("---")
+
+    # ── Descargas ────────────────────────────────────────────────────────
+    st.subheader("⬇️ Descargas")
+
+    ciclo = {
+        "question":          question,
+        "mode":              result.get("mode"),
+        "chunks_retrieved":  result.get("chunks_retrieved"),
+        "elapsed_seconds":   result.get("elapsed_seconds"),
+        "agents":            agents,
+        "final_evaluation":  final_data,
+        "texto_sugerido":    texto_sugerido,
+        "original_context":  original_context,
+        "thread_id":         st.session_state.get("thread_id"),
+        "rubric_id":         st.session_state.get("rubric_id"),
+        "iterations":        st.session_state.get("iterations"),
+    }
+    debate_md  = _build_debate_markdown(agents, final_data)
+    metricas   = metrics or {"info": "No calculadas todavía. Pulsa 'Calcular métricas NLP'."}
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.download_button(
+            "📄 ciclo.json",
+            data=_json.dumps(ciclo, ensure_ascii=False, indent=2),
+            file_name="ciclo.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    with col2:
+        st.download_button(
+            "💬 debate.md",
+            data=debate_md,
+            file_name="debate.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with col3:
+        st.download_button(
+            "📊 metricas.json",
+            data=_json.dumps(metricas, ensure_ascii=False, indent=2),
+            file_name="metricas.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+
+def _fmt(v: Any) -> str:
+    """Formatea valores numéricos para st.metric; None → '—'."""
+    if v is None:
+        return "—"
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+
+def _build_debate_markdown(agents: dict, final_data: dict) -> str:
+    """Genera el markdown descargable de la Pestaña 2 (Debate)."""
+    import json as _json
+    lines = ["# Debate Multiagente", ""]
+    perspectives = [
+        ("Perspectiva Formal (Auditor)",       agents.get("auditor",      {})),
+        ("Perspectiva Metodológica (Metodólogo)", agents.get("metodologico", {})),
+        ("Perspectiva Contextual (Investigador)", agents.get("investigador", {})),
+        ("Síntesis (Mentor Final)",            agents.get("mentor_final", {}) or final_data),
+    ]
+    for label, data in perspectives:
+        lines.append(f"## {label}")
+        if not data:
+            lines.append("_(sin output disponible)_")
+        else:
+            comentario = (
+                data.get("comentario")
+                or data.get("evaluacion")
+                or data.get("evaluacion_inicial")
+                or data.get("mensaje_pedagogico")
+                or ""
+            )
+            if comentario:
+                lines.append(comentario)
+            else:
+                lines.append("```json\n" + _json.dumps(data, ensure_ascii=False, indent=2) + "\n```")
+        lines.append("")
+    lines.append("---")
+    lines.append("_Consenso/Disenso: disponibles al rediseñar agentes (Sprint 4)._")
+    return "\n".join(lines)
+
+
 def _render_query_result_block(
     question: str,
     result: dict,
     elapsed: float,
 ) -> None:
     """
-    Renderiza el bloque de resultado de una consulta exitosa.
+    Renderiza el resultado de una evaluación completada en 4 pestañas:
+      1. Evaluación  — texto final, feedback auditor, recomendaciones.
+      2. Debate      — perspectivas mapeadas a los 6 agentes actuales.
+      3. Contexto RAG— sub-pestañas: tesis / libros / cruzado.
+      4. Reportes    — métricas NLP + descargas (ciclo/debate/metricas).
+
     Extraído de page_query para poder volver a mostrarlo entre reruns
     leyendo desde st.session_state['last_result'].
     """
-    import json as _json
+    raw_result    = result.get("result", {})
+    agent_outputs = _extract_agent_outputs(raw_result)
+    final_data    = agent_outputs.get("mentor_final", {}) or {}
 
-    # ── Métricas de la consulta ──────────────────────────────────
-    st.success(f"✅ Consulta completada en **{elapsed} s**")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Modo de ejecución", result.get("mode", "—"))
-    m2.metric("Chunks recuperados", result.get("chunks_retrieved", "—"))
-    m3.metric("Tiempo", f"{result.get('elapsed_seconds', elapsed)} s")
+    # ── Header: "Mentoría Completada" + 3 métricas ─────────────────────
+    st.success("✅ **Mentoría Completada**")
 
-    # ── Contexto recuperado (RAG) ────────────────────────────────
-    with st.expander("📖 Contexto recuperado de ChromaDB (RAG)", expanded=False):
-        st.markdown(
-            "_Estos son los fragmentos del proyecto de investigación que el sistema consideró más relevantes "
-            "para tu pregunta. Se enviaron como contexto a los agentes._"
-        )
-        context_preview = result.get("context_preview", "")
-        st.text_area("Contexto (preview):", value=context_preview, height=200, disabled=True)
+    iterations = st.session_state.get("iterations", 1)
+    score      = _extract_score(final_data)
+    vigesimal  = round(score * 2, 1)
 
-    # ── Respuesta de los agentes ─────────────────────────────────
-    st.subheader("🤖 Respuesta de los agentes")
+    h1, h2, h3 = st.columns(3)
+    h1.metric("Iteraciones",     iterations)
+    h2.metric("Puntaje (0-10)",  f"{score:.1f}")
+    h3.metric("Nota vigesimal",  f"{vigesimal:.1f}")
+    st.caption(
+        f"Modo: `{result.get('mode', '—')}` · Chunks: {result.get('chunks_retrieved', '—')} · "
+        f"Tiempo: {result.get('elapsed_seconds', elapsed)} s"
+    )
 
-    raw_result = result.get("result", {})
+    st.markdown("---")
 
-    if "flowise_response" in raw_result:
-        flowise_resp = raw_result["flowise_response"]
-        if isinstance(flowise_resp, dict):
-            answer_text = (
-                flowise_resp.get("text")
-                or flowise_resp.get("output")
-                or flowise_resp.get("answer")
-                or str(flowise_resp)
-            )
-        else:
-            answer_text = str(flowise_resp)
+    # ── 4 pestañas ──────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📋 Evaluación", "💬 Debate", "📖 Contexto RAG", "📊 Reportes",
+    ])
 
-        render_flowise_answer(answer_text)
+    with tab1:
+        _render_tab_evaluation(agent_outputs, final_data, raw_result)
+    with tab2:
+        _render_tab_debate(agent_outputs, final_data)
+    with tab3:
+        _render_tab_rag(result)
+    with tab4:
+        _render_tab_reportes(question, result, agent_outputs, final_data)
 
-        if isinstance(flowise_resp, dict) and len(flowise_resp) > 1:
-            with st.expander("🔧 Ver payload completo de Flowise (debug)", expanded=False):
-                st.json(flowise_resp)
-
-    elif "agents" in raw_result or any(
-        k in raw_result for k in ["mentor_intake", "investigador", "auditor", "final"]
-    ):
-        st.markdown("_Resultado de los agentes Python secuenciales:_")
-        for agent_name, agent_output in raw_result.items():
-            with st.expander(f"🤖 {agent_name.replace('_', ' ').title()}"):
-                if isinstance(agent_output, str):
-                    st.markdown(agent_output)
-                else:
-                    st.json(agent_output)
-    else:
-        st.json(raw_result)
-
-    # ── Texto sugerido ───────────────────────────────────────────
-    texto_sugerido   = raw_result.get("texto_sugerido")
-    original_context = raw_result.get("original_context", result.get("context_preview", ""))
-
-    if texto_sugerido:
-        st.markdown("---")
-        st.subheader("✏️ Texto sugerido para reemplazar esta sección")
-        st.markdown(
-            "_Versión mejorada generada por los agentes. "
-            "Incorpora las recomendaciones priorizadas y los hallazgos del "
-            "**Agente Investigador**. Lista para copiar y pegar en tu tesis._"
-        )
-
-        col_orig, col_sug = st.columns(2, gap="medium")
-
-        with col_orig:
-            st.markdown(
-                "<p style='font-weight:600;color:#888'>📄 Texto original analizado</p>",
-                unsafe_allow_html=True,
-            )
-            st.text_area(
-                "original",
-                value=original_context,
-                height=380,
-                disabled=True,
-                label_visibility="collapsed",
-            )
-
-        with col_sug:
-            st.markdown(
-                "<p style='font-weight:600;color:#2e7d32'>✨ Texto mejorado (sugerido)</p>",
-                unsafe_allow_html=True,
-            )
-            st.text_area(
-                "sugerido",
-                value=texto_sugerido,
-                height=380,
-                label_visibility="collapsed",
-                help="Selecciona todo el texto (Ctrl+A dentro del área) y copia.",
-            )
-
-        st.caption(
-            "💡 Este texto es una **sugerencia** basada en el análisis. "
-            "Revísalo y adáptalo antes de incluirlo en tu tesis."
-        )
-
-    elif texto_sugerido is None:
-        st.warning(
-            "⚠️ **Texto sugerido no disponible** — el LLM para generarlo no está configurado.\n\n"
-            "Abre el archivo `.env` y añade tu clave de Groq:\n"
-            "```\nLLM_PROVIDER=groq\nGROQ_API_KEY=gsk_...\n```\n"
-            "Obtén la clave gratis en [console.groq.com](https://console.groq.com) → API Keys. "
-            "Luego **reinicia el backend** (`python main.py`)."
-        )
+    # ── Debug expandible (payload completo) ─────────────────────────────
+    with st.expander("🔧 Ver payload completo (debug)", expanded=False):
+        st.json(result)
 
 
 _OVERVIEW_SECTION_ID = "__overview__"
