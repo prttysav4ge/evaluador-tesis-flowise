@@ -134,6 +134,7 @@ _SESSION_KEYS_CONFIG = (
     "thread_id",
     "rubric_id",
     "iterations",
+    "selected_section_id",
     "workflow_stage",
 )
 
@@ -146,10 +147,11 @@ def init_session_state() -> None:
     """
     defaults = {
         # config
-        "thread_id":       str(uuid.uuid4()),
-        "rubric_id":       "upao_ing_sistemas",
-        "iterations":       2,
-        "workflow_stage":  STAGE_UPLOAD,
+        "thread_id":             str(uuid.uuid4()),
+        "rubric_id":             "upao_ing_sistemas",
+        "iterations":             2,
+        "selected_section_id":   "__overview__",   # dropdown — "Vista general" por defecto
+        "workflow_stage":        STAGE_UPLOAD,
         # pdf
         "pdf_uploaded":     False,
         "pdf_filename":     "",
@@ -1066,58 +1068,147 @@ def _render_query_result_block(
         )
 
 
+_OVERVIEW_SECTION_ID = "__overview__"
+
+
+def _build_question_from_section(section_id: str, section_title: str = "") -> str:
+    """
+    Construye la pregunta enviada al backend a partir de la sección elegida
+    en el dropdown. Reemplaza el text_area libre de versiones previas.
+    """
+    if section_id == _OVERVIEW_SECTION_ID:
+        return (
+            "Evalúa de forma integral el proyecto de tesis: planteamiento del problema, "
+            "marco teórico, metodología, coherencia entre objetivos y resultados, y "
+            "rigor académico general. Aplica la rúbrica UPAO de Ing. Sistemas."
+        )
+    label = f"{section_id} {section_title}".strip()
+    return (
+        f"Evalúa la sección '{label}' del proyecto de tesis aplicando la rúbrica "
+        f"UPAO de Ing. Sistemas. Identifica fortalezas, debilidades y "
+        f"recomendaciones específicas."
+    )
+
+
 def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, bool]:
     """
-    Renderiza el formulario de consulta. Devuelve (question, top_k, session_id, send_clicked).
-    Extraído de page_query para que sea consumible solo en STAGE_CONFIGURE.
+    Renderiza el Paso 2 — Configura y lanza la evaluación.
+    Devuelve (question, top_k, session_id, send_clicked).
+
+    Layout (alineado con la app de referencia):
+      - Banner verde 'PDF cargado: <nombre>'
+      - Linea 'Rubrica activa: UPAO oficial (N items).'
+      - H2 'Paso 2 — Configura y lanza la evaluacion'
+      - Dropdown de seccion (overview + outline)
+      - Texto contextual
+      - Expander 'Configuracion avanzada' con slider iteraciones (1-3, default 2)
+        y top_k (oculto en avanzado, no expuesto en la UX principal)
+      - Banner informativo con tiempo estimado y agentes
+      - Boton rojo 'Iniciar Evaluacion Multiagente'
     """
-    st.success(f"📚 ChromaDB tiene **{total_chunks} fragmentos** listos para consultar.")
+    pdf_name      = st.session_state.get("pdf_filename", "—")
+    rubric        = RUBRICS.get(st.session_state.get("rubric_id", "upao_ing_sistemas"), {})
+    rubric_label  = rubric.get("label",   "—")
+    rubric_items  = rubric.get("items",   0)
+    outline       = st.session_state.get("pdf_outline", []) or []
 
-    examples = [
-        "Evalúa la formulación del problema de investigación",
-        "¿Es adecuado el marco metodológico del proyecto de investigación?",
-        "¿Qué debilidades tiene el marco teórico?",
-        "Analiza la coherencia entre los objetivos y las conclusiones",
-        "¿Las referencias bibliográficas son suficientes y actualizadas?",
-    ]
+    st.success(f"📄 **PDF cargado:** `{pdf_name}`")
+    st.markdown(f"_Rúbrica activa: **{rubric_label}** ({rubric_items} ítems)._")
 
-    example_choice = st.selectbox(
-        "💡 Ejemplos de consulta (opcional):",
-        ["— Escribe tu propia pregunta —"] + examples,
+    st.header("Paso 2 — Configura y lanza la evaluación")
+
+    # ── Dropdown de sección ──────────────────────────────────────────────
+    # Construimos opciones: primero "Vista general", después outline.
+    option_ids:   list[str] = [_OVERVIEW_SECTION_ID]
+    option_labels: list[str] = ["Vista general del proyecto (panorama completo)"]
+    for h in outline:
+        option_ids.append(h["section_id"])
+        option_labels.append(f"{h['section_id']} — {h['title']}")
+
+    current_sid = st.session_state.get("selected_section_id", _OVERVIEW_SECTION_ID)
+    try:
+        current_idx = option_ids.index(current_sid)
+    except ValueError:
+        current_idx = 0
+
+    chosen_label = st.selectbox(
+        "Sección del proyecto de tesis",
+        options=option_labels,
+        index=current_idx,
+        help=(
+            "Elige una sección específica para análisis profundo, o 'Vista general' "
+            "para una evaluación integral del proyecto."
+        ),
     )
-
-    default_question = "" if example_choice.startswith("—") else example_choice
-    question = st.text_area(
-        "Tu pregunta o instrucción:",
-        value=default_question,
-        height=100,
-        max_chars=2000,
-        placeholder="ej. Evalúa la formulación del problema de investigación...",
+    selected_idx = option_labels.index(chosen_label)
+    selected_sid = option_ids[selected_idx]
+    selected_title = (
+        "" if selected_sid == _OVERVIEW_SECTION_ID
+        else outline[selected_idx - 1]["title"]   # -1 por la entrada overview
     )
+    st.session_state["selected_section_id"] = selected_sid
 
-    with st.expander("⚙️ Parámetros avanzados"):
+    # Texto contextual debajo del dropdown
+    if selected_sid == _OVERVIEW_SECTION_ID:
+        st.caption(
+            "🔍 El sistema recuperará fragmentos representativos de todas las secciones "
+            "y los agentes producirán una evaluación integral."
+        )
+    else:
+        st.caption(
+            f"🔍 Análisis enfocado en la sección **{selected_sid} {selected_title}**. "
+            "Los agentes profundizarán en fortalezas, debilidades y mejoras concretas."
+        )
+
+    # ── Configuración avanzada ────────────────────────────────────────────
+    with st.expander("⚙️ Configuración avanzada"):
+        iterations = st.slider(
+            "Iteraciones del panel de debate",
+            min_value=1, max_value=3,
+            value=st.session_state.get("iterations", 2),
+            help=(
+                "Número de pasadas del panel multiagente. Más iteraciones = mayor "
+                "profundidad de análisis, pero también mayor latencia y costo de tokens."
+            ),
+        )
+        st.session_state["iterations"] = iterations
+
         top_k = st.slider(
-            "Top-K (fragmentos a recuperar de ChromaDB)",
+            "Top-K (fragmentos RAG)",
             min_value=1, max_value=20, value=5,
-            help="Cuántos fragmentos relevantes se le pasan al agente como contexto.",
-        )
-        # Por defecto usamos el thread_id del workflow para que Flowise mantenga
-        # contexto entre consultas del mismo PDF. El usuario puede sobrescribirlo.
-        session_id = st.text_input(
-            "Session ID (opcional)",
-            value=st.session_state.get("thread_id", ""),
-            help="Para mantener historial de conversación en Flowise. Por defecto, el thread_id del workflow.",
+            help="Cuántos fragmentos relevantes de ChromaDB se le pasan al agente como contexto.",
         )
 
+        # Por defecto usamos el thread_id del workflow para que Flowise mantenga
+        # contexto entre consultas del mismo PDF.
+        session_id = st.text_input(
+            "Session ID (avanzado)",
+            value=st.session_state.get("thread_id", ""),
+            help="Identifica la conversación en Flowise. Por defecto, el thread_id del workflow.",
+        )
+
+    # ── Banner informativo ───────────────────────────────────────────────
+    iters    = st.session_state.get("iterations", 2)
+    eta_min  = 1 if iters == 1 else (2 if iters == 2 else 3)
+    eta_max  = 2 if iters == 1 else (3 if iters == 2 else 5)
+    st.info(
+        f"🛈 **{iters} iteración(es)** · panel de debate (4 subagentes) · "
+        f"Tiempo estimado: **{eta_min}–{eta_max} min** · "
+        f"Agentes: _Supervisor, Auditor, Metodólogo, Consenso, Disenso, Debate, Redactor_"
+    )
+
+    # ── Botón rojo grande ────────────────────────────────────────────────
+    # Streamlit no soporta color rojo nativo en st.button; usamos type='primary'
+    # y un divider visual para diferenciarlo del resto del form.
+    st.markdown("")
     send = st.button(
-        "🚀 Enviar consulta a los agentes",
+        "🚀 Iniciar Evaluación Multiagente",
         type="primary",
         use_container_width=True,
-        disabled=len(question.strip()) < 5,
     )
 
-    if len(question.strip()) > 0 and len(question.strip()) < 5:
-        st.caption("La pregunta debe tener al menos 5 caracteres.")
+    # Construir la pregunta a enviar al backend
+    question = _build_question_from_section(selected_sid, selected_title)
 
     # Link discreto a ver fragmentación
     if st.button("🔬 Ver fragmentación del PDF", help="Visualiza chunks y embeddings"):
@@ -1128,8 +1219,6 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
 
 
 def page_query():
-    st.header("💬 Consultar Agentes")
-
     # ── Verificar que hay datos ──────────────────────────────────────────
     col_info = api_collection_info()
     if col_info is None:
@@ -1167,13 +1256,7 @@ def page_query():
                 st.rerun()
         return
 
-    st.markdown(
-        "Escribe tu pregunta o instrucción de evaluación. "
-        "El sistema recuperará los fragmentos más relevantes de ChromaDB "
-        "usando similitud semántica y los enviará a los **agentes Flowise** para que generen la evaluación."
-    )
-
-    # ── Formulario de consulta (extraído a helper) ──────────────────────
+    # ── Formulario Paso 2 (dropdown sección + slider + botón) ──────────
     question, top_k, session_id, send = _render_query_form_block(total)
 
     # ── Ejecutar consulta + persistir resultado + avanzar al stage RESULTS
