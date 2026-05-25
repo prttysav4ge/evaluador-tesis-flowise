@@ -123,6 +123,7 @@ _SESSION_KEYS_PDF = (
     "pdf_uploaded",
     "pdf_filename",
     "pdf_sections",
+    "pdf_outline",
     "pdf_chunks_total",
 )
 _SESSION_KEYS_RESULT = (
@@ -152,7 +153,8 @@ def init_session_state() -> None:
         # pdf
         "pdf_uploaded":     False,
         "pdf_filename":     "",
-        "pdf_sections":     {},
+        "pdf_sections":     {},     # legacy keyword-based dict
+        "pdf_outline":      [],     # outline jerárquico (1.1.1) — alimentado por /upload-pdf
         "pdf_chunks_total": 0,
         # result
         "last_result":     None,
@@ -187,14 +189,28 @@ def reset_for_new_section() -> None:
     init_session_state()
 
 
-def mark_pdf_uploaded(filename: str, sections: dict, chunks_total: int) -> None:
+def mark_pdf_uploaded(
+    filename: str,
+    sections: dict,
+    chunks_total: int,
+    outline: list | None = None,
+) -> None:
     """
     Marca el PDF como vectorizado y avanza el workflow al stage 'configure'.
     Llamado por page_upload() tras un upload exitoso.
+
+    Args:
+        filename:     nombre original del PDF.
+        sections:     dict keyword-based (legacy, conteo por categoría).
+        chunks_total: total de chunks almacenados en ChromaDB.
+        outline:      lista de encabezados jerárquicos (1.1.1) con
+                      chunks_count y chars_count. Vacía si el PDF no
+                      usa numeración (el frontend cae a sections).
     """
     st.session_state["pdf_uploaded"]     = True
     st.session_state["pdf_filename"]     = filename
     st.session_state["pdf_sections"]     = sections or {}
+    st.session_state["pdf_outline"]      = outline or []
     st.session_state["pdf_chunks_total"] = chunks_total
     st.session_state["workflow_stage"]   = STAGE_CONFIGURE
 
@@ -436,6 +452,91 @@ def section_badge(section_key: str) -> str:
 # ─────────────────────────────────────────────
 #  PANTALLA 1 — CARGAR PDF
 # ─────────────────────────────────────────────
+# Umbral debajo del cual una sección se marca con ⚠️ en la tabla
+# (señala que probablemente quedó incompleta al detectar el heading).
+_FRAGMENT_WARNING_CHARS = 200
+
+
+def _render_fragmentation_table(
+    outline: list,
+    sections_found: dict,
+    total_chars_fallback: int,
+) -> None:
+    """
+    Renderiza la tabla expandible `Sección | Pág. | Chars | Frags` con
+    ⚠️ amarillo para secciones con chars < _FRAGMENT_WARNING_CHARS.
+
+    Prefiere el outline jerárquico (1.1.1) si está disponible; si no, cae
+    a sections_found (keyword-based) sin info de página/chars.
+    """
+    if outline:
+        rows = [
+            {
+                "Sección": (
+                    f"⚠️ {h['section_id']} {h['title']}"
+                    if h.get("chars_count", 0) < _FRAGMENT_WARNING_CHARS
+                    else f"{h['section_id']} {h['title']}"
+                ),
+                "Pág.":   h["page"],
+                "Chars":  h["chars_count"],
+                "Frags":  h["chunks_count"],
+            }
+            for h in outline
+        ]
+        total_sections = len(outline)
+        total_frags    = sum(h["chunks_count"] for h in outline)
+        total_chars    = sum(h["chars_count"]  for h in outline)
+        source_note    = ""
+
+    elif sections_found:
+        # Fallback: sin info de página/chars por sección, solo conteo de chunks.
+        # Cuando llega Sprint 3, este caso debería ser raro (la mayoría de
+        # tesis tiene numeración 1.1.1).
+        rows = [
+            {
+                "Sección": SECTION_LABELS.get(k, k),
+                "Pág.":   "—",
+                "Chars":  "—",
+                "Frags":  v,
+            }
+            for k, v in sorted(sections_found.items(), key=lambda x: -x[1])
+        ]
+        total_sections = len(sections_found)
+        total_frags    = sum(sections_found.values())
+        total_chars    = total_chars_fallback
+        source_note    = (
+            " — _(detección por keyword; no se encontró numeración jerárquica `1.1.1`)_"
+        )
+
+    else:
+        st.info("No se detectaron secciones en el PDF.")
+        return
+
+    summary = (
+        f"**Fragmentación completada:** {total_sections} secciones · "
+        f"{total_frags} fragmentos · {total_chars:,} caracteres totales"
+        f"{source_note}"
+    )
+
+    with st.expander(summary, expanded=True):
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Sección": st.column_config.TextColumn("Sección", width="large"),
+                "Pág.":    st.column_config.Column("Pág.",  width="small"),
+                "Chars":   st.column_config.Column("Chars", width="small"),
+                "Frags":   st.column_config.Column("Frags", width="small"),
+            },
+        )
+        if any("⚠️" in row["Sección"] for row in rows):
+            st.caption(
+                f"⚠️ secciones con menos de {_FRAGMENT_WARNING_CHARS} caracteres "
+                "(probablemente quedaron incompletas o son sólo títulos sin cuerpo)."
+            )
+
+
 def page_upload():
     st.header("📄 Cargar PDF de Proyecto de Investigación")
     st.markdown(
@@ -472,7 +573,7 @@ def page_upload():
     if uploaded is not None:
         st.markdown(f"**Archivo:** `{uploaded.name}` — `{uploaded.size / 1024:.1f} KB`")
 
-        if st.button("🚀 Procesar PDF y guardar en ChromaDB", type="primary", use_container_width=True):
+        if st.button("🚀 Vectorizar PDF", type="primary", use_container_width=True):
             with st.spinner("Procesando PDF… puede tardar unos segundos según el tamaño."):
                 t0 = time.time()
                 result, status = api_upload_pdf(uploaded.read(), uploaded.name)
@@ -486,48 +587,60 @@ def page_upload():
                     filename=uploaded.name,
                     sections=result.get("sections_found", {}),
                     chunks_total=result.get("chunks_stored", 0),
+                    outline=result.get("outline", []),
                 )
 
-                st.success(f"✅ PDF procesado en {elapsed} s")
+                # ── Mensaje verde personalizado (formato referencia) ────
+                st.success(
+                    f"✅ PDF `{uploaded.name}` ya está vectorizado "
+                    f"({elapsed} s)."
+                )
                 st.balloons()
 
-                # Métricas principales
+                # ── Métricas principales ────────────────────────────────
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Páginas", result["total_pages"])
-                m2.metric("Chunks generados", result["chunks_generated"])
+                m1.metric("Páginas",            result["total_pages"])
+                m2.metric("Chunks generados",   result["chunks_generated"])
                 m3.metric("Chunks almacenados", result["chunks_stored"])
-                m4.metric("Tamaño", f"{result['file_size_mb']} MB")
+                m4.metric("Tamaño",             f"{result['file_size_mb']} MB")
 
-                # Distribución de secciones detectadas
+                # ── Tabla de fragmentación (Sección | Pág. | Chars | Frags)
+                _render_fragmentation_table(
+                    outline=result.get("outline", []),
+                    sections_found=result.get("sections_found", {}),
+                    total_chars_fallback=result.get("chunks_generated", 0) * 800,
+                )
+
+                # ── Gráficos avanzados (legacy plotly, movido a expander)
                 sections = result.get("sections_found", {})
                 if sections:
-                    st.subheader("📊 Secciones académicas detectadas")
-                    df_sec = pd.DataFrame(
-                        [
-                            {
-                                "Sección": SECTION_LABELS.get(k, k),
-                                "Chunks": v,
-                                "key": k,
-                            }
-                            for k, v in sorted(sections.items(), key=lambda x: -x[1])
-                        ]
-                    )
-                    colors = [SECTION_COLORS.get(row["key"], "#BDBDBD") for _, row in df_sec.iterrows()]
-                    fig = px.bar(
-                        df_sec,
-                        x="Chunks",
-                        y="Sección",
-                        orientation="h",
-                        color="Sección",
-                        color_discrete_sequence=colors,
-                        title="Distribución de chunks por sección",
-                    )
-                    fig.update_layout(showlegend=False, height=max(300, len(sections) * 28))
-                    st.plotly_chart(fig, use_container_width=True)
+                    with st.expander("📊 Ver gráficos avanzados (plotly)"):
+                        df_sec = pd.DataFrame(
+                            [
+                                {
+                                    "Sección": SECTION_LABELS.get(k, k),
+                                    "Chunks": v,
+                                    "key": k,
+                                }
+                                for k, v in sorted(sections.items(), key=lambda x: -x[1])
+                            ]
+                        )
+                        colors = [SECTION_COLORS.get(row["key"], "#BDBDBD") for _, row in df_sec.iterrows()]
+                        fig = px.bar(
+                            df_sec,
+                            x="Chunks",
+                            y="Sección",
+                            orientation="h",
+                            color="Sección",
+                            color_discrete_sequence=colors,
+                            title="Distribución de chunks por sección",
+                        )
+                        fig.update_layout(showlegend=False, height=max(300, len(sections) * 28))
+                        st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown(f"> {result.get('message', '')}")
 
-                # Botones de avance del workflow
+                # ── Botones de avance del workflow ──────────────────────
                 col_next, col_view = st.columns(2)
                 with col_next:
                     if st.button(
