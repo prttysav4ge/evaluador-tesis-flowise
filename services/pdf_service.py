@@ -47,11 +47,15 @@ _SECTION_PATTERNS: List[Tuple[re.Pattern, str]] = [
 # ---------------------------------------------------------------------- #
 #  Detección jerárquica por numeración 1.1.1                              #
 # ---------------------------------------------------------------------- #
-# Encabezados de sección con numeración tipo "1.", "1.1", "1.1.1.", hasta 4 niveles.
-# El título debe empezar con mayúscula (latina o acentuada) y tener 3-100 chars.
+# Encabezados de sección con numeración jerárquica: 1.1, 1.1.1, 1.1.1.1.
+# Exigimos AL MENOS un punto (i.e. 2+ niveles) porque "9 SINOPSIS" o
+# "13 Capítulo" suelen ser numeros de pagina pegados al body por pypdf,
+# no encabezados reales. Las secciones de nivel-1 sin numeración tipo
+# 'INTRODUCCIÓN', 'METODOLOGÍA' las captura igualmente _SECTION_PATTERNS.
+# El título debe empezar con mayúscula o letra y tener 3-100 chars.
 # Se aplica con re.MULTILINE sobre el texto limpio de cada página.
 _HIERARCHICAL_HEADING_RE = re.compile(
-    r"^[ \t]*(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+([A-ZÁÉÍÓÚÑa-zá-úñ][^\n]{2,99})[ \t]*$",
+    r"^[ \t]*(\d{1,2}(?:\.\d{1,2}){1,3})\.?\s+([A-ZÁÉÍÓÚÑa-zá-úñ][^\n]{2,99})[ \t]*$",
     re.MULTILINE,
 )
 
@@ -64,19 +68,46 @@ def _looks_like_bibliography_entry(title: str) -> bool:
     return bool(re.search(r"\(\s*(?:19|20)\d{2}", title))
 
 
+# Líneas del índice (Table of Contents) tienen formato "Título ............ 15".
+# Detectamos 4+ puntos consecutivos como marcador robusto.
+_TOC_DOT_LEADER_RE = re.compile(r"\.{4,}")
+
+
+def _looks_like_toc_entry(title: str) -> bool:
+    """True si la línea parece una entrada del índice (tiene dot leaders)."""
+    return bool(_TOC_DOT_LEADER_RE.search(title))
+
+
+def _clean_heading_title(title: str) -> str:
+    """
+    Limpia el título: quita dot leaders residuales y número de página al
+    final ('Título .... 15' → 'Título'). Idempotente.
+    """
+    # Recortar todo desde el primer bloque de 2+ puntos consecutivos
+    title = re.split(r"\s*\.{2,}.*$", title, maxsplit=1)[0]
+    # Quitar número de página suelto al final ('Título 15')
+    title = re.sub(r"\s+\d{1,4}\s*$", "", title)
+    return title.strip()
+
+
 def extract_hierarchical_outline(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Detecta encabezados jerárquicos (1.1.1) en el texto de cada página y
-    construye un outline ordenado en aparición.
+    construye un outline ordenado por aparición.
 
     Returns:
         [{"section_id": "1.1.1", "title": "Antecedentes", "page": 12, "level": 3}, ...]
 
-    Si el PDF no usa numeración (ej. solo keywords), retorna lista vacía;
-    el caller puede entonces caer a la detección por keyword.
+    Reglas para evitar falsos positivos:
+      - Líneas con dot leaders (4+ puntos consecutivos) se asumen TOC y se descartan.
+      - Citas bibliográficas con año entre paréntesis se descartan.
+      - Si un mismo section_id aparece varias veces, se conserva la ÚLTIMA
+        ocurrencia (la del cuerpo del documento, no la del índice).
+
+    Si el PDF no usa numeración, retorna lista vacía → el caller cae a keywords.
     """
-    outline: List[Dict[str, Any]] = []
-    seen_ids: set[str] = set()
+    # Indexamos por section_id para conservar la última aparición.
+    by_id: Dict[str, Dict[str, Any]] = {}
 
     for page_data in pages:
         page_num = page_data["page"]
@@ -84,24 +115,30 @@ def extract_hierarchical_outline(pages: List[Dict[str, Any]]) -> List[Dict[str, 
 
         for match in _HIERARCHICAL_HEADING_RE.finditer(text):
             section_id = match.group(1).rstrip(".")
-            title      = match.group(2).strip()
+            raw_title  = match.group(2).strip()
 
-            if _looks_like_bibliography_entry(title):
+            if _looks_like_bibliography_entry(raw_title):
                 continue
-            # Evitar duplicados por re-detección del mismo heading en distintas páginas
-            # (puede pasar si el heading aparece en un índice y luego en el cuerpo).
-            # Conservamos la PRIMERA aparición (la del índice o el body, lo que venga antes).
-            if section_id in seen_ids:
-                continue
-            seen_ids.add(section_id)
+            if _looks_like_toc_entry(raw_title):
+                continue   # es una línea del índice
 
-            outline.append({
+            title = _clean_heading_title(raw_title)
+            if len(title) < 3:
+                continue   # quedó vacío tras la limpieza
+
+            by_id[section_id] = {
                 "section_id": section_id,
                 "title":      title,
                 "page":       page_num,
                 "level":      section_id.count(".") + 1,
-            })
+            }
 
+    # Ordenar por (página, id_natural) — los headings van en el orden del PDF.
+    def _natural_sort_key(h: Dict[str, Any]) -> tuple:
+        parts = [int(p) for p in h["section_id"].split(".")]
+        return (h["page"], parts)
+
+    outline = sorted(by_id.values(), key=_natural_sort_key)
     logger.info(f"📑 Outline jerárquico detectado: {len(outline)} encabezados")
     return outline
 
