@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from services.pdf_service import process_pdf
+from services.pdf_service import is_scanned_pdf, process_pdf
 from vectorstore.chroma_store import chroma_store
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,22 @@ async def upload_pdf(
         raise HTTPException(status_code=400, detail="El PDF parece estar vacío.")
 
     filename = file.filename or "tesis_sin_nombre.pdf"
+
+    # ------------------------------------------------------------------ #
+    #  Validación: PDF escaneado sin OCR                                    #
+    # ------------------------------------------------------------------ #
+    # Hacemos esta verificación ANTES del procesamiento completo para
+    # rechazar rápido y con mensaje claro, en vez de fallar más adelante
+    # con un 422 ambiguo al no encontrar chunks.
+    if is_scanned_pdf(pdf_bytes):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No se puede leer este PDF — parece escaneado sin OCR. "
+                "Convierte el PDF a texto (con un OCR como Adobe Acrobat, "
+                "Tesseract o ABBYY FineReader) antes de subirlo."
+            ),
+        )
 
     # ------------------------------------------------------------------ #
     #  Procesamiento                                                       #

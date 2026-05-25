@@ -192,6 +192,43 @@ def extract_pages(pdf_bytes: bytes) -> List[Dict[str, Any]]:
     return pages
 
 
+def is_scanned_pdf(
+    pdf_bytes: bytes,
+    min_chars_per_page: int = 50,
+    ratio_threshold: float = 0.9,
+) -> bool:
+    """
+    Heurística para detectar PDFs sin capa de texto (escaneados sin OCR).
+
+    Returns:
+        True si al menos `ratio_threshold` (90% por default) de las páginas
+        tienen menos de `min_chars_per_page` (50 por default) caracteres
+        extraíbles. También True si el PDF está vacío.
+
+    Limitación: no detecta PDFs con OCR de mala calidad (texto basura);
+    sólo el caso claro de "no hay texto extraíble".
+    """
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+    except Exception:
+        return True  # PDF corrupto
+
+    total = len(reader.pages)
+    if total == 0:
+        return True
+
+    empty_pages = 0
+    for page in reader.pages:
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if len(text) < min_chars_per_page:
+            empty_pages += 1
+
+    return (empty_pages / total) >= ratio_threshold
+
+
 def build_chunks(
     pages: List[Dict[str, Any]],
     source_name: str,
