@@ -44,6 +44,110 @@ _SECTION_PATTERNS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bBIBLIOGRAF[IÍ]A|REFERENCIAS\b", re.I), "referencias"),
 ]
 
+# ---------------------------------------------------------------------- #
+#  Detección jerárquica por numeración 1.1.1                              #
+# ---------------------------------------------------------------------- #
+# Encabezados de sección con numeración tipo "1.", "1.1", "1.1.1.", hasta 4 niveles.
+# El título debe empezar con mayúscula (latina o acentuada) y tener 3-100 chars.
+# Se aplica con re.MULTILINE sobre el texto limpio de cada página.
+_HIERARCHICAL_HEADING_RE = re.compile(
+    r"^[ \t]*(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+([A-ZÁÉÍÓÚÑa-zá-úñ][^\n]{2,99})[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def _looks_like_bibliography_entry(title: str) -> bool:
+    """
+    Filtro heurístico: descarta líneas que parecen citas bibliográficas
+    (autores con año entre paréntesis) en lugar de títulos de sección.
+    """
+    return bool(re.search(r"\(\s*(?:19|20)\d{2}", title))
+
+
+def extract_hierarchical_outline(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Detecta encabezados jerárquicos (1.1.1) en el texto de cada página y
+    construye un outline ordenado en aparición.
+
+    Returns:
+        [{"section_id": "1.1.1", "title": "Antecedentes", "page": 12, "level": 3}, ...]
+
+    Si el PDF no usa numeración (ej. solo keywords), retorna lista vacía;
+    el caller puede entonces caer a la detección por keyword.
+    """
+    outline: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for page_data in pages:
+        page_num = page_data["page"]
+        text     = page_data["text"]
+
+        for match in _HIERARCHICAL_HEADING_RE.finditer(text):
+            section_id = match.group(1).rstrip(".")
+            title      = match.group(2).strip()
+
+            if _looks_like_bibliography_entry(title):
+                continue
+            # Evitar duplicados por re-detección del mismo heading en distintas páginas
+            # (puede pasar si el heading aparece en un índice y luego en el cuerpo).
+            # Conservamos la PRIMERA aparición (la del índice o el body, lo que venga antes).
+            if section_id in seen_ids:
+                continue
+            seen_ids.add(section_id)
+
+            outline.append({
+                "section_id": section_id,
+                "title":      title,
+                "page":       page_num,
+                "level":      section_id.count(".") + 1,
+            })
+
+    logger.info(f"📑 Outline jerárquico detectado: {len(outline)} encabezados")
+    return outline
+
+
+def _assign_chunks_to_outline(
+    chunks: List[Dict[str, Any]],
+    outline: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Asigna cada chunk al heading más reciente cuyo `page` sea ≤ al `page`
+    del chunk. Esto agrupa los chunks bajo su sección padre.
+
+    Modifica `chunks` in-place añadiendo `metadata["outline_section_id"]`,
+    y devuelve un outline enriquecido con `chunks_count` + `chars_count`.
+
+    Limitación: cuando una página tiene más de un heading, todos los chunks
+    de esa página se asignan al ÚLTIMO heading anterior o de la propia página.
+    Se acepta esta imprecisión a cambio de no requerir offsets dentro de la página.
+    """
+    if not outline:
+        return []
+
+    sorted_outline = sorted(outline, key=lambda h: h["page"])
+    stats = {h["section_id"]: {"chunks": 0, "chars": 0} for h in sorted_outline}
+
+    for chunk in chunks:
+        page = chunk["metadata"].get("page", 0)
+        current = None
+        for heading in sorted_outline:
+            if heading["page"] <= page:
+                current = heading
+            else:
+                break
+        if current is None:
+            continue   # chunk anterior al primer heading; queda sin asignar
+        sid = current["section_id"]
+        chunk["metadata"]["outline_section_id"] = sid
+        stats[sid]["chunks"] += 1
+        stats[sid]["chars"]  += chunk["metadata"].get("char_count", 0)
+
+    return [
+        {**h, "chunks_count": stats[h["section_id"]]["chunks"],
+              "chars_count":  stats[h["section_id"]]["chars"]}
+        for h in sorted_outline
+    ]
+
 
 def detect_section(text: str) -> str:
     """
@@ -151,7 +255,10 @@ def process_pdf(
             "total_pages": int,
             "pages_with_content": int,
             "chunks": List[{"text": str, "metadata": dict}],
-            "sections_found": dict,
+            "sections_found": dict,           # conteo keyword-based (legacy)
+            "outline": List[dict],            # encabezados jerárquicos (1.1.1)
+                                              # con chunks_count y chars_count.
+                                              # Vacío si el PDF no usa numeración.
         }
     """
     from app.config import settings
@@ -166,11 +273,16 @@ def process_pdf(
         chunk_overlap=settings.CHUNK_OVERLAP,
     )
 
-    # Conteo de secciones detectadas
+    # Conteo de secciones detectadas (keyword-based, legacy)
     sections_found: Dict[str, int] = {}
     for chunk in chunks:
         sec = chunk["metadata"]["section_detected"]
         sections_found[sec] = sections_found.get(sec, 0) + 1
+
+    # Outline jerárquico (1.1.1) — alimenta el dropdown del Sprint 3.
+    # _assign_chunks_to_outline mutará chunks[*]['metadata']['outline_section_id'].
+    raw_outline = extract_hierarchical_outline(pages)
+    outline     = _assign_chunks_to_outline(chunks, raw_outline)
 
     return {
         "filename": filename,
@@ -178,4 +290,5 @@ def process_pdf(
         "pages_with_content": len(pages),
         "chunks": chunks,
         "sections_found": sections_found,
+        "outline": outline,
     }

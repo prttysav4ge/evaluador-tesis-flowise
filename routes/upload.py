@@ -116,6 +116,9 @@ async def upload_pdf(
         "chunks_generated": len(chunks),
         "chunks_stored": stored,
         "sections_found": result["sections_found"],
+        # Outline jerárquico (1.1.1) con chunks_count y chars_count por sección.
+        # Vacío si el PDF no usa numeración; el frontend cae a sections_found.
+        "outline": result.get("outline", []),
         "message": (
             f"✅ PDF procesado correctamente. "
             f"{stored} fragmentos almacenados en ChromaDB. "
