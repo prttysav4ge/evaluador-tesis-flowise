@@ -410,8 +410,12 @@ def render_sidebar() -> bool:
             if st.button(
                 "🔄 Nueva\nevaluación",
                 use_container_width=True,
-                help="Resetea PDF, configuración y resultados. Genera nuevo thread_id.",
+                help="Borra el PDF de ChromaDB, resetea configuración y resultados, y genera nuevo thread_id.",
             ):
+                # IMPORTANTE: también vaciamos ChromaDB. Si no, el bridge de
+                # recuperación de sesión en main() vería chunks pre-existentes
+                # y nos reenviaría al Paso 2, bloqueando volver a cargar PDF.
+                api_reset_collection()
                 reset_all_state()
                 st.rerun()
         with col_section:
@@ -1644,6 +1648,9 @@ def page_query():
                 st.rerun()
         with col_b:
             if st.button("🆕 Nueva evaluación (otro PDF)", use_container_width=True):
+                # Misma logica que el boton del sidebar: vaciar ChromaDB para
+                # poder volver a cargar PDF sin que el bridge nos atrape.
+                api_reset_collection()
                 reset_all_state()
                 st.rerun()
         return
