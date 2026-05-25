@@ -564,7 +564,17 @@
         ],
         "inputAnchors": [],
         "inputs": {
-          "endOutput": "returnLastOutput"
+          "endOutput": "returnCustomStateValues",
+          "endCustomStateValues": [
+            { "key": "intake_result" },
+            { "key": "research_findings" },
+            { "key": "audit_result" },
+            { "key": "method_result" },
+            { "key": "writing_result" },
+            { "key": "mentor_result" },
+            { "key": "scoring" },
+            { "key": "debug_info" }
+          ]
         },
         "outputAnchors": [],
         "outputs": {},

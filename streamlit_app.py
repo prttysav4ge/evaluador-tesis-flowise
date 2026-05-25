@@ -971,6 +971,20 @@ _AGENT_LABEL_TO_KEY = {
     "sintesis y consenso": "mentor_final",
 }
 
+# Mapeo de state-keys (formato 'returnCustomStateValues' del End node) →
+# agent-keys del frontend. Habilitado por Commit 4 del Sprint 3: el End
+# node devuelve directamente el flow state en lugar de sólo el último
+# output, así que el frontend lee los 6 agentes con un único parseo en
+# vez de caminar agentFlowExecutedData.
+_STATE_KEY_TO_AGENT = {
+    "intake_result":     "mentor_intake",
+    "research_findings": "investigador",
+    "audit_result":      "auditor",
+    "method_result":     "metodologico",
+    "writing_result":    "redactor",
+    "mentor_result":     "mentor_final",
+}
+
 
 def _parse_maybe_json(text: Any) -> Any:
     """Intenta parsear text como JSON; si falla, lo devuelve tal cual."""
@@ -1018,6 +1032,25 @@ def _extract_agent_outputs(raw_result: dict) -> dict:
     if not isinstance(flowise_resp, dict):
         return outputs
 
+    # ── Estrategia A — formato nuevo (Sprint 3 Commit 4) ────────────────
+    # El End node 'returnCustomStateValues' devuelve un dict con las state
+    # keys (intake_result, research_findings, etc.) directamente serializado
+    # en flowise_response['text']. Cada valor es a su vez un JSON string.
+    state_dict = _parse_maybe_json(flowise_resp.get("text") or "")
+    if isinstance(state_dict, dict) and any(k in state_dict for k in _STATE_KEY_TO_AGENT):
+        for state_key, agent_key in _STATE_KEY_TO_AGENT.items():
+            raw_value = state_dict.get(state_key)
+            if not raw_value:
+                continue
+            parsed = _parse_maybe_json(raw_value)
+            outputs[agent_key] = (
+                parsed if isinstance(parsed, dict)
+                else {"raw_output": parsed}
+            )
+        return outputs
+
+    # ── Estrategia B — formato legacy (returnLastOutput) ────────────────
+    # Caminamos agentFlowExecutedData para extraer cada nodo individualmente.
     exec_data = flowise_resp.get("agentFlowExecutedData", []) or []
     for node in exec_data:
         if not isinstance(node, dict):
@@ -1035,8 +1068,7 @@ def _extract_agent_outputs(raw_result: dict) -> dict:
         if parsed:
             outputs[key] = parsed if isinstance(parsed, dict) else {"raw_output": parsed}
 
-    # Si no obtuvimos nada del execution tree, al menos rescatamos el output
-    # del Mentor Final desde flowise_response['text'] (el formato actual del End node).
+    # Último recurso: el text del flowise_response es el output del Mentor Final.
     if not outputs["mentor_final"]:
         outputs["mentor_final"] = _parse_maybe_json(
             flowise_resp.get("text") or flowise_resp.get("output") or {}
