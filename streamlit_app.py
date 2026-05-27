@@ -578,18 +578,69 @@ def page_upload():
     )
 
     if uploaded is not None:
-        st.markdown(f"**Archivo:** `{uploaded.name}` — `{uploaded.size / 1024:.1f} KB`")
+        # Layout 2 columnas: info banner a la izquierda, Vectorizar +
+        # panel de progreso a la derecha.
+        col_info, col_action = st.columns([2, 1])
 
-        if st.button("🚀 Vectorizar PDF", type="primary", use_container_width=True):
-            with st.spinner("Procesando PDF… puede tardar unos segundos según el tamaño."):
-                t0 = time.time()
-                result, status = api_upload_pdf(uploaded.read(), uploaded.name)
-                elapsed = round(time.time() - t0, 1)
+        with col_info:
+            st.info(
+                f"📄 **{uploaded.name}** ({uploaded.size / 1024:.1f} KB)\n\n"
+                "Primera vectorización descarga el modelo "
+                "`multilingual-e5-small` (~117 MB). Las siguientes son instantáneas."
+            )
 
-            if status == 200 and result.get("success"):
+        with col_action:
+            do_vectorize = st.button(
+                "🚀 Vectorizar PDF",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if do_vectorize:
+            # Panel de progreso a la derecha mientras corre el pipeline.
+            with col_action:
+                with st.status("⏳ Procesando PDF de tesis…", expanded=True) as status_box:
+                    st.write("Analizando estructura del PDF (separando índice del contenido)…")
+                    t0 = time.time()
+                    result, status_code = api_upload_pdf(uploaded.read(), uploaded.name)
+                    elapsed = round(time.time() - t0, 1)
+
+                    if status_code == 200 and result.get("success"):
+                        outline = result.get("outline", []) or []
+                        total_pages = result.get("total_pages", 0)
+                        total_chars = sum(h.get("chars_count", 0) for h in outline) or \
+                                      result.get("chunks_generated", 0) * 800
+
+                        st.write(
+                            f"Texto de contenido extraído: **{total_chars:,} caracteres** "
+                            f"en **{total_pages} páginas**"
+                        )
+                        st.write(f"Estructura detectada: **{len(outline)} secciones** en el índice")
+                        # Muestra primeros 8 headings + '…' si hay más
+                        preview_headings = outline[:8]
+                        for h in preview_headings:
+                            st.markdown(f"- **{h['section_id']}.** {h['title']}")
+                        if len(outline) > len(preview_headings):
+                            st.markdown("- …")
+                        st.write("Dividiendo contenido por secciones del índice (chunking semántico)…")
+                        st.write("Generando embeddings locales (`multilingual-e5-small`)…")
+
+                        status_box.update(
+                            label=f"✅ Vectorizado en {elapsed} s",
+                            state="complete",
+                            expanded=False,
+                        )
+                    else:
+                        status_box.update(
+                            label=f"❌ Error ({status_code})",
+                            state="error",
+                            expanded=True,
+                        )
+                        st.error(result.get("detail", "Error desconocido"))
+
+            # Render final fuera de las columnas (ancho completo)
+            if status_code == 200 and result.get("success"):
                 # Marca PDF como vectorizado y avanza workflow → STAGE_CONFIGURE.
-                # Lo hacemos antes del render para que el sidebar refleje el cambio
-                # en cuanto el usuario navegue por los botones del bloque siguiente.
                 mark_pdf_uploaded(
                     filename=uploaded.name,
                     sections=result.get("sections_found", {}),
@@ -599,17 +650,8 @@ def page_upload():
 
                 # ── Mensaje verde personalizado (formato referencia) ────
                 st.success(
-                    f"✅ PDF `{uploaded.name}` ya está vectorizado "
-                    f"({elapsed} s)."
+                    f"PDF `'{uploaded.name}'` ya está vectorizado."
                 )
-                st.balloons()
-
-                # ── Métricas principales ────────────────────────────────
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Páginas",            result["total_pages"])
-                m2.metric("Chunks generados",   result["chunks_generated"])
-                m3.metric("Chunks almacenados", result["chunks_stored"])
-                m4.metric("Tamaño",             f"{result['file_size_mb']} MB")
 
                 # ── Tabla de fragmentación (Sección | Pág. | Chars | Frags)
                 _render_fragmentation_table(
@@ -618,36 +660,9 @@ def page_upload():
                     total_chars_fallback=result.get("chunks_generated", 0) * 800,
                 )
 
-                # ── Gráficos avanzados (legacy plotly, movido a expander)
-                sections = result.get("sections_found", {})
-                if sections:
-                    with st.expander("📊 Ver gráficos avanzados (plotly)"):
-                        df_sec = pd.DataFrame(
-                            [
-                                {
-                                    "Sección": SECTION_LABELS.get(k, k),
-                                    "Chunks": v,
-                                    "key": k,
-                                }
-                                for k, v in sorted(sections.items(), key=lambda x: -x[1])
-                            ]
-                        )
-                        colors = [SECTION_COLORS.get(row["key"], "#BDBDBD") for _, row in df_sec.iterrows()]
-                        fig = px.bar(
-                            df_sec,
-                            x="Chunks",
-                            y="Sección",
-                            orientation="h",
-                            color="Sección",
-                            color_discrete_sequence=colors,
-                            title="Distribución de chunks por sección",
-                        )
-                        fig.update_layout(showlegend=False, height=max(300, len(sections) * 28))
-                        st.plotly_chart(fig, use_container_width=True)
-
-                st.markdown(f"> {result.get('message', '')}")
-
-                # ── Botones de avance del workflow ──────────────────────
+                # ── Botones de avance del workflow (Phase 4 los reemplaza
+                # con el bloque 'Paso 2 - Rubrica' + boton 'Continuar a
+                # selección de sección'). Por ahora preservamos navegación.
                 col_next, col_view = st.columns(2)
                 with col_next:
                     if st.button(
@@ -664,8 +679,6 @@ def page_upload():
                     ):
                         st.session_state["workflow_stage"] = STAGE_EMBEDDINGS
                         st.rerun()
-            else:
-                st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
     # Nota: la 'Zona peligrosa - Reiniciar ChromaDB' se eliminó porque
     # 'Nueva evaluación' del sidebar ahora vacía ChromaDB automáticamente.
 
