@@ -34,12 +34,22 @@ MANIFEST
 venv/
 env/
 ENV/
-Lib/
-Scripts/
+# Lib/ y Scripts/ del venv solo cuando estan dentro de .venv/venv/env
+**/.venv/Lib/
+**/.venv/Scripts/
+**/venv/Lib/
+**/venv/Scripts/
+pyvenv.cfg
 
 # ----- Base de datos vectorial (ChromaDB) -----
 # Archivos generados localmente; se reconstruyen desde los PDFs fuente
 chroma_db/
+
+# ----- Biblioteca Metodológica -----
+# PDFs de referencia (Hernández Sampieri, Tamayo, etc.) — NO se trackean.
+# Se indexan localmente con scripts/index_reference_books.py.
+reference_books/
+*.pdf
 
 # ----- Archivos de base de datos -----
 *.db

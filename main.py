@@ -54,9 +54,16 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     logger.info(f"   Modo agentes  : {'FLOWISE' if settings.USE_FLOWISE else 'PYTHON DIRECTO'}")
     logger.info("-" * 60)
 
-    # Inicializar ChromaDB
+    # Inicializar ChromaDB (colección de tesis)
     from vectorstore.chroma_store import chroma_store
     chroma_store.initialize()
+
+    # Inicializar colección de libros metodológicos (Biblioteca Metodológica).
+    # No falla si está vacía — el script scripts/index_reference_books.py la
+    # puebla. Si no se ha corrido, el endpoint devuelve lista vacía y el
+    # sidebar muestra los libros sin contadores.
+    from vectorstore.refs_store import refs_store
+    refs_store.initialize()
 
     # Pre-cargar el modelo de embeddings (evita el cold-start en el primer request)
     logger.info("⏳ Pre-cargando modelo de embeddings…")
@@ -108,10 +115,12 @@ app.add_middleware(
 from routes.upload import router as upload_router
 from routes.query import router as query_router
 from routes.admin import router as admin_router
+from routes.reference_books import router as refs_router
 
 app.include_router(upload_router, prefix="/api/v1", tags=["📥 Upload PDF"])
 app.include_router(query_router, prefix="/api/v1", tags=["🔍 Query & Agentes"])
 app.include_router(admin_router, prefix="/api/v1", tags=["⚙️ Admin"])
+app.include_router(refs_router, prefix="/api/v1", tags=["📚 Biblioteca"])
 
 
 # ====================================================================== #

@@ -312,6 +312,15 @@ def api_reset_collection():
         return {"detail": str(e)}, 500
 
 
+def api_reference_books():
+    """Devuelve dict {books, total_books, total_fragments} o None si falla."""
+    try:
+        r = _client().get(f"{API_PREFIX}/reference-books")
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 # ─────────────────────────────────────────────
 #  COMPONENTES REUTILIZABLES
 # ─────────────────────────────────────────────
@@ -428,6 +437,12 @@ def render_sidebar() -> bool:
         st.markdown("")
 
         # ── Biblioteca Metodológica ──────────────────────────────────────
+        # Si todavía no se cacheó, consultamos el endpoint del backend una vez.
+        if st.session_state.get("reference_books") is None:
+            data = api_reference_books()
+            if data and data.get("books"):
+                st.session_state["reference_books"] = data["books"]
+
         books = st.session_state.get("reference_books") or _REFERENCE_BOOKS_PLACEHOLDER
         total_fragments = sum(
             b.get("fragments") or 0 for b in books
@@ -436,7 +451,10 @@ def render_sidebar() -> bool:
         if total_fragments:
             st.caption(f"**{len(books)} libro(s) · {total_fragments:,} fragmentos indexados**")
         else:
-            st.caption(f"**{len(books)} libro(s) · indexación pendiente**")
+            st.caption(
+                f"**{len(books)} libro(s) · indexación pendiente** "
+                "(corre `python scripts/index_reference_books.py`)"
+            )
 
         for book in books:
             frags = book.get("fragments")
