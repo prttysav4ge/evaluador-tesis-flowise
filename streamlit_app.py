@@ -165,6 +165,9 @@ def init_session_state() -> None:
         "last_question":   "",
         # historial (preexistente — preservado por compatibilidad)
         "query_history":   [],
+        # Biblioteca Metodológica — alimentado por Phase 6 con datos reales
+        # del endpoint /api/v1/reference-books. None hasta primer fetch.
+        "reference_books": None,
     }
     for key, default in defaults.items():
         st.session_state.setdefault(key, default)
@@ -352,40 +355,54 @@ def render_health_badge_compact() -> bool:
     return True
 
 
+# Lista placeholder de los 4 PDFs metodológicos de referencia.
+# Phase 6 reemplaza esto con datos reales leídos desde el endpoint
+# /api/v1/reference-books (que indexa los PDFs en una colección Chroma aparte).
+_REFERENCE_BOOKS_PLACEHOLDER = [
+    {"title": "METODOLOGIA DE LA INVESTIGACION CUANTITATIVA-CUALITATIVA Y REDACCION DE LA TESIS", "fragments": None},
+    {"title": "METODOLOGIA DE LA INVESTIGACION-GUIA PARA EL PROYECTO DE TESIS",                   "fragments": None},
+    {"title": "METODOLOGÍA DE LA INVESTIGACION-LAS RUTAS CUANTITATIVA, CUALITATIVA Y MIXTA",      "fragments": None},
+    {"title": "PROYECTO DE TESIS-GUIA PRACTICA PARA INVESTIGACION CUANTITATIVA",                  "fragments": None},
+]
+
+
 def render_sidebar() -> bool:
     """
-    Sidebar persistente al estilo de la app de referencia:
-    header, estado del workflow, PDF activo, thread_id, rúbrica,
-    botones de reset y biblioteca metodológica (placeholder hasta Sprint 4).
-
-    Reemplaza el sidebar anterior basado en st.radio. La navegación
-    entre pantallas se decide por workflow_stage en main().
+    Sidebar persistente alineado con la app de referencia 'Mentoría UPAO':
+    header + caption del stack, badge de estado del workflow, botón único de
+    reset, selector de rúbrica y biblioteca metodológica.
 
     Returns:
         bool — True si el backend está inicializado.
     """
+    # Backend health lo verificamos pero NO lo mostramos a menos que falle
+    # (la referencia no tiene este indicador visible cuando todo va bien).
+    health = api_health()
+    backend_ok = health is not None
+
     with st.sidebar:
         # ── Header ────────────────────────────────────────────────────────
-        st.image(
-            "https://img.icons8.com/fluency/96/graduation-cap.png",
-            width=72,
-        )
-        st.title("🎓 Sistema de Mentoría Académica Multiagente")
-        st.caption("Flowise + RAG + Groq Llama 3.3")
-        st.markdown("---")
-
-        # ── Estado del backend (compacto) ────────────────────────────────
-        backend_ok = render_health_badge_compact()
-        st.markdown("---")
+        st.title("🌱 Mentoría UPAO")
+        st.caption("PoC · Flowise + RAG + Groq Llama 3.3")
+        st.markdown("")  # respiro vertical
 
         # ── Estado del workflow ───────────────────────────────────────────
-        badge_text, badge_emoji = workflow_stage_badge()
-        st.markdown(f"**Estado:** {badge_emoji} {badge_text}")
+        if not backend_ok:
+            st.error("⛔ Backend no inicializado")
+        else:
+            badge_text, badge_emoji = workflow_stage_badge()
+            st.markdown(f"**Estado:** {badge_emoji} {badge_text}")
+        st.markdown("")
 
-        if st.session_state.get("pdf_uploaded"):
-            st.caption(f"📄 PDF: `{st.session_state['pdf_filename']}`")
-        st.caption(f"🧵 Thread: `{thread_id_short()}`")
-        st.markdown("---")
+        # ── Botón único de reset ─────────────────────────────────────────
+        if st.button(
+            "🔄 Nueva evaluación",
+            use_container_width=True,
+            help="Vacía ChromaDB, resetea configuración y resultados, y genera nuevo thread_id.",
+        ):
+            api_reset_collection()
+            reset_all_state()
+            st.rerun()
 
         # ── Universidad / Rúbrica ────────────────────────────────────────
         rubric_keys   = list(RUBRICS.keys())
@@ -394,59 +411,42 @@ def render_sidebar() -> bool:
             st.session_state.get("rubric_id", rubric_keys[0])
         )
         chosen_label = st.selectbox(
-            "Universidad / Rúbrica",
+            "Universidad / Rúbrica:",
             options=rubric_labels,
             index=current_idx,
             key="_sidebar_rubric_select",
+            help=(
+                "Plantilla de rúbrica oficial. Podés subir tu propia rúbrica de "
+                "evaluación en el Paso 2 para personalizar el análisis."
+            ),
         )
         st.session_state["rubric_id"] = rubric_keys[
             rubric_labels.index(chosen_label)
         ]
-        st.markdown("---")
+        st.markdown("")
 
-        # ── Botones de reset ──────────────────────────────────────────────
-        col_new, col_section = st.columns(2)
-        with col_new:
-            if st.button(
-                "🔄 Nueva\nevaluación",
-                use_container_width=True,
-                help="Borra el PDF de ChromaDB, resetea configuración y resultados, y genera nuevo thread_id.",
-            ):
-                # IMPORTANTE: también vaciamos ChromaDB. Si no, el bridge de
-                # recuperación de sesión en main() vería chunks pre-existentes
-                # y nos reenviaría al Paso 2, bloqueando volver a cargar PDF.
-                api_reset_collection()
-                reset_all_state()
-                st.rerun()
-        with col_section:
-            section_btn_disabled = not st.session_state.get("pdf_uploaded", False)
-            if st.button(
-                "📑 Otra\nsección",
-                use_container_width=True,
-                disabled=section_btn_disabled,
-                help="Conserva el PDF vectorizado; sólo limpia el resultado.",
-            ):
-                reset_for_new_section()
-                st.rerun()
-        st.markdown("---")
-
-        # ── Biblioteca Metodológica (placeholder — Sprint 4) ─────────────
-        with st.expander("📚 Biblioteca Metodológica"):
-            st.caption(
-                "_Disponible en Sprint 4: libros metodológicos de referencia "
-                "(Hernández Sampieri, Tamayo y otros) preindexados para "
-                "enriquecer el contexto del análisis._"
-            )
-        st.markdown("---")
-
-        # ── Stack técnico (preservado) ───────────────────────────────────
-        st.caption(
-            "**Stack técnico:**\n"
-            "- 🐍 FastAPI · Python\n"
-            "- 🧮 ChromaDB · `multilingual-e5-small`\n"
-            "- 🤖 Flowise Agentflow\n"
-            "- ⚡ Groq · `llama-3.3-70b-versatile`\n"
+        # ── Biblioteca Metodológica ──────────────────────────────────────
+        books = st.session_state.get("reference_books") or _REFERENCE_BOOKS_PLACEHOLDER
+        total_fragments = sum(
+            b.get("fragments") or 0 for b in books
         )
+        st.markdown("### 📚 Biblioteca Metodológica")
+        if total_fragments:
+            st.caption(f"**{len(books)} libro(s) · {total_fragments:,} fragmentos indexados**")
+        else:
+            st.caption(f"**{len(books)} libro(s) · indexación pendiente**")
+
+        for book in books:
+            frags = book.get("fragments")
+            frag_caption = (
+                f"{frags:,} fragmentos" if frags
+                else "_pendiente de indexación_"
+            )
+            st.markdown(
+                f"📖 **{book['title']}**  \n"
+                f"<span style='font-size:0.85em;color:#888'>{frag_caption}</span>",
+                unsafe_allow_html=True,
+            )
 
     return backend_ok
 
