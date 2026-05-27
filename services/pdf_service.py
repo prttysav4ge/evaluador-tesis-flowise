@@ -78,6 +78,28 @@ def _looks_like_toc_entry(title: str) -> bool:
     return bool(_TOC_DOT_LEADER_RE.search(title))
 
 
+# Items del cronograma/calendario que el regex puede confundir con secciones
+# (ej. "7.1 Fecha de inicio", "7.2 Fecha de término" dentro del anexo de
+# cronograma). No son secciones evaluables — son metadata del proyecto.
+_NON_EVALUABLE_TITLE_RE = re.compile(
+    r"^(?:"
+    r"Fecha\s+(?:de\s+)?(?:inicio|t[eé]rmino|fin(?:alizaci[oó]n)?|entrega)"
+    r"|Per[ií]odo\s+(?:de\s+)?(?:ejecuci[oó]n|estudio|investigaci[oó]n)"
+    r"|Plazo\s+(?:de\s+)?(?:entrega|ejecuci[oó]n)"
+    r"|Duraci[oó]n\s+(?:del\s+)?(?:proyecto|estudio)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_non_evaluable_metadata(title: str) -> bool:
+    """
+    True si el título es metadata del proyecto (fechas, plazos, duración)
+    en lugar de una sección evaluable por el panel multiagente.
+    """
+    return bool(_NON_EVALUABLE_TITLE_RE.match(title.strip()))
+
+
 def _clean_heading_title(title: str) -> str:
     """
     Limpia el título: quita dot leaders residuales y número de página al
@@ -125,6 +147,8 @@ def extract_hierarchical_outline(pages: List[Dict[str, Any]]) -> List[Dict[str, 
             title = _clean_heading_title(raw_title)
             if len(title) < 3:
                 continue   # quedó vacío tras la limpieza
+            if _looks_like_non_evaluable_metadata(title):
+                continue   # fechas/plazos del cronograma, no secciones
 
             by_id[section_id] = {
                 "section_id": section_id,
