@@ -1550,12 +1550,16 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
     rubric        = RUBRICS.get(st.session_state.get("rubric_id", "upao_ing_sistemas"), {})
     rubric_label  = rubric.get("label",   "—")
     rubric_items  = rubric.get("items",   0)
+    custom_rubric = st.session_state.get("custom_rubric_filename", "")
     outline       = st.session_state.get("pdf_outline", []) or []
 
     st.success(f"📄 **PDF cargado:** `{pdf_name}`")
-    st.markdown(f"_Rúbrica activa: **{rubric_label}** ({rubric_items} ítems)._")
+    if custom_rubric:
+        st.markdown(f"_Rúbrica activa: **{custom_rubric}** (personalizada)._")
+    else:
+        st.markdown(f"_Rúbrica activa: **{rubric_label}** ({rubric_items} ítems)._")
 
-    st.header("Paso 2 — Configura y lanza la evaluación")
+    st.header("Paso 3 — Selecciona la sección a evaluar")
 
     # ── Dropdown de sección ──────────────────────────────────────────────
     # Construimos opciones: primero "Vista general", después outline.
@@ -1649,11 +1653,6 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
 
     # Construir la pregunta a enviar al backend
     question = _build_question_from_section(selected_sid, selected_title)
-
-    # Link discreto a ver fragmentación
-    if st.button("🔬 Ver fragmentación del PDF", help="Visualiza chunks y embeddings"):
-        st.session_state["workflow_stage"] = STAGE_EMBEDDINGS
-        st.rerun()
 
     return question, top_k, session_id or None, send
 
