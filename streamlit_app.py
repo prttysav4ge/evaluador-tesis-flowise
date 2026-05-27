@@ -114,7 +114,7 @@ STAGE_EMBEDDINGS = "embeddings"  # vista de fragmentación (acceso opcional)
 RUBRICS = {
     "upao_ing_sistemas": {
         "label":   "UPAO · Ing. Sistemas",
-        "items":   12,
+        "items":   33,
         "version": "oficial",
     },
 }
@@ -126,6 +126,7 @@ _SESSION_KEYS_PDF = (
     "pdf_sections",
     "pdf_outline",
     "pdf_chunks_total",
+    "custom_rubric_filename",   # nombre del PDF de rúbrica subido (sin procesar todavía)
 )
 _SESSION_KEYS_RESULT = (
     "last_result",
@@ -155,11 +156,12 @@ def init_session_state() -> None:
         "selected_section_id":   "__overview__",   # dropdown — "Vista general" por defecto
         "workflow_stage":        STAGE_UPLOAD,
         # pdf
-        "pdf_uploaded":     False,
-        "pdf_filename":     "",
-        "pdf_sections":     {},     # legacy keyword-based dict
-        "pdf_outline":      [],     # outline jerárquico (1.1.1) — alimentado por /upload-pdf
-        "pdf_chunks_total": 0,
+        "pdf_uploaded":          False,
+        "pdf_filename":          "",
+        "pdf_sections":          {},     # legacy keyword-based dict
+        "pdf_outline":           [],     # outline jerárquico (1.1.1) — alimentado por /upload-pdf
+        "pdf_chunks_total":      0,
+        "custom_rubric_filename": "",     # Paso 2: PDF de rúbrica opcional (solo nombre, no procesado)
         # result
         "last_result":     None,
         "last_question":   "",
@@ -545,6 +547,49 @@ def _render_fragmentation_table(
             )
 
 
+def _render_rubrica_step() -> None:
+    """
+    Paso 2 — Rúbrica de evaluación (opcional).
+
+    El usuario puede subir un PDF de su rúbrica personalizada. Por ahora
+    el archivo NO se procesa (solo se guarda el nombre en session_state).
+    Sprint 4 lo vectorizará y lo inyectará como contexto adicional.
+    """
+    rubric = RUBRICS.get(st.session_state.get("rubric_id", "upao_ing_sistemas"), {})
+    rubric_label = rubric.get("label",   "—")
+    rubric_items = rubric.get("items",   0)
+
+    st.header("Paso 2 — Rúbrica de evaluación (opcional)")
+
+    col_upload, col_info = st.columns([1, 2])
+
+    with col_upload:
+        rubric_file = st.file_uploader(
+            "Sube la rúbrica de evaluación (PDF)",
+            type=["pdf"],
+            help="Opcional. Si no subís nada, se usa la rúbrica oficial UPAO.",
+            key="_rubric_uploader",
+        )
+        if rubric_file is not None:
+            st.session_state["custom_rubric_filename"] = rubric_file.name
+
+    with col_info:
+        custom = st.session_state.get("custom_rubric_filename", "")
+        if custom:
+            st.success(
+                f"✅ Rúbrica personalizada cargada: **{custom}**\n\n"
+                "_Por ahora solo se registra el archivo. La integración "
+                "completa con el pipeline llega en una iteración siguiente._"
+            )
+        else:
+            st.info(
+                f"Sin rúbrica subida — se usará la **rúbrica oficial {rubric_label}** "
+                f"({rubric_items} ítems).  \n"
+                "Puedes subir la rúbrica de tu jurado evaluador para obtener "
+                "una evaluación personalizada."
+            )
+
+
 def _render_landing_intro() -> None:
     """
     Header + explicación '¿Cómo funciona este sistema?' al estilo de la
@@ -660,25 +705,21 @@ def page_upload():
                     total_chars_fallback=result.get("chunks_generated", 0) * 800,
                 )
 
-                # ── Botones de avance del workflow (Phase 4 los reemplaza
-                # con el bloque 'Paso 2 - Rubrica' + boton 'Continuar a
-                # selección de sección'). Por ahora preservamos navegación.
-                col_next, col_view = st.columns(2)
-                with col_next:
-                    if st.button(
-                        "🚀 Continuar a evaluación",
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        st.session_state["workflow_stage"] = STAGE_CONFIGURE
-                        st.rerun()
-                with col_view:
-                    if st.button(
-                        "🔬 Ver fragmentación",
-                        use_container_width=True,
-                    ):
-                        st.session_state["workflow_stage"] = STAGE_EMBEDDINGS
-                        st.rerun()
+                st.markdown("---")
+
+                # ── Paso 2 — Rúbrica de evaluación (opcional) ───────────
+                _render_rubrica_step()
+
+                st.markdown("")
+
+                # ── Botón único para avanzar al Paso 3 (selección sección)
+                if st.button(
+                    "Continuar a selección de sección →",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    st.session_state["workflow_stage"] = STAGE_CONFIGURE
+                    st.rerun()
     # Nota: la 'Zona peligrosa - Reiniciar ChromaDB' se eliminó porque
     # 'Nueva evaluación' del sidebar ahora vacía ChromaDB automáticamente.
 
