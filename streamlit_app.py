@@ -545,38 +545,37 @@ def _render_fragmentation_table(
             )
 
 
-def page_upload():
-    st.header("📄 Cargar PDF de Proyecto de Investigación")
-    st.markdown(
-        "Sube el PDF de tu proyecto de investigación. El sistema lo procesará automáticamente: "
-        "extrae el texto, lo divide en fragmentos semánticos *(chunks)*, "
-        "genera los embeddings y los almacena en **ChromaDB**."
-    )
+def _render_landing_intro() -> None:
+    """
+    Header + explicación '¿Cómo funciona este sistema?' al estilo de la
+    app de referencia. Se muestra siempre al tope de la página de carga
+    (incluso después de vectorizar) para mantener la identidad visual.
+    """
+    st.title("Sistema de Mentoría Académica Multiagente")
 
-    # ── Info de colección actual ──────────────────────────────────────────
-    col_info = api_collection_info()
-    if col_info and col_info.get("total_chunks", 0) > 0:
-        total = col_info["total_chunks"]
-        st.info(
-            f"📚 Ya hay **{total} fragmentos** almacenados en ChromaDB "
-            f"(colección: `{col_info.get('collection', '?')}`). "
-            "Puedes subir otro PDF para añadir más, o usar el botón de reinicio abajo."
-        )
+    st.markdown("**¿Cómo funciona este sistema?**")
+    st.markdown(
+        "1. **Sube el PDF** de tu proyecto de tesis borrador\n"
+        "2. (Opcional) **Sube tu rúbrica de evaluación** — si no la subes, se usa la rúbrica UPAO por defecto\n"
+        "3. **El sistema vectoriza** el documento (embeddings locales, sin enviar datos al exterior)\n"
+        "4. **Elige una sección** y el sistema recupera solo ese fragmento (anti-token-burn)\n"
+        "5. **Red multiagente** Redactor ↔ Auditor ↔ Metodólogo mejora el texto iterativamente\n"
+        "6. **Tú revisas y apruebas** la versión final como mentor"
+    )
+    st.markdown("---")
+
+
+def page_upload():
+    _render_landing_intro()
+
+    st.header("Paso 1 — Carga el PDF de tu proyecto de tesis")
 
     # ── Uploader ──────────────────────────────────────────────────────────
     uploaded = st.file_uploader(
-        "Arrastra o selecciona tu PDF aquí",
+        "Sube el borrador del proyecto de tesis (PDF)",
         type=["pdf"],
-        help="Máximo 50 MB. Solo se aceptan PDFs con texto (no escaneados).",
+        help="El PDF se procesa localmente. Los embeddings se generan en tu máquina.",
     )
-
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        chunk_size = st.slider("Tamaño de chunk (caracteres)", 300, 1500, 800, 50,
-                               help="Número máximo de caracteres por fragmento.")
-    with col2:
-        top_k = st.number_input("Overlap", 0, 500, 150, 25,
-                                help="Solapamiento entre chunks consecutivos.")
 
     if uploaded is not None:
         st.markdown(f"**Archivo:** `{uploaded.name}` — `{uploaded.size / 1024:.1f} KB`")
@@ -667,17 +666,8 @@ def page_upload():
                         st.rerun()
             else:
                 st.error(f"❌ Error ({status}): {result.get('detail', 'Error desconocido')}")
-
-    # ── Zona peligrosa — reiniciar colección ─────────────────────────────
-    with st.expander("⚠️ Zona peligrosa — Reiniciar ChromaDB"):
-        st.warning("Esta acción **borrará todos los fragmentos** almacenados. Es irreversible.")
-        if st.button("🗑️ Borrar toda la colección", type="secondary"):
-            res, status = api_reset_collection()
-            if status == 200:
-                st.success(res.get("message", "Colección reiniciada."))
-                st.rerun()
-            else:
-                st.error(res.get("detail", "Error al reiniciar."))
+    # Nota: la 'Zona peligrosa - Reiniciar ChromaDB' se eliminó porque
+    # 'Nueva evaluación' del sidebar ahora vacía ChromaDB automáticamente.
 
 
 # ─────────────────────────────────────────────
