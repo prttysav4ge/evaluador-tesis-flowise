@@ -353,7 +353,7 @@ def process_pdf(
             "total_pages": int,
             "pages_with_content": int,
             "chunks": List[{"text": str, "metadata": dict}],
-            "sections_found": dict,           # conteo keyword-based (legacy)
+            "sections_found": dict,           # conteo keyword-based (fallback)
             "outline": List[dict],            # encabezados jerárquicos (1.1.1)
                                               # con chunks_count y chars_count.
                                               # Vacío si el PDF no usa numeración.
@@ -371,13 +371,13 @@ def process_pdf(
         chunk_overlap=settings.CHUNK_OVERLAP,
     )
 
-    # Conteo de secciones detectadas (keyword-based, legacy)
+    # Conteo de secciones detectadas (keyword-based, fallback al outline)
     sections_found: Dict[str, int] = {}
     for chunk in chunks:
         sec = chunk["metadata"]["section_detected"]
         sections_found[sec] = sections_found.get(sec, 0) + 1
 
-    # Outline jerárquico (1.1.1) — alimenta el dropdown del Sprint 3.
+    # Outline jerárquico (1.1.1) — alimenta el dropdown de selección de sección.
     # _assign_chunks_to_outline mutará chunks[*]['metadata']['outline_section_id'].
     raw_outline = extract_hierarchical_outline(pages)
     outline     = _assign_chunks_to_outline(chunks, raw_outline)

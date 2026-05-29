@@ -103,14 +103,13 @@ SECTION_LABELS = {
 #  ESTADO DE LA APLICACIÓN (workflow + session)
 # ─────────────────────────────────────────────
 # Etapas del workflow — driven por st.session_state["workflow_stage"].
-# La pantalla principal se elige según esta clave (ver Sprint 1 commit 3).
+# La pantalla principal se elige según esta clave (dispatcher en main()).
 STAGE_UPLOAD     = "upload"      # sin PDF cargado
 STAGE_CONFIGURE  = "configure"   # PDF vectorizado, eligiendo sección
 STAGE_RESULTS    = "results"     # evaluación completada, mostrando 4 pestañas
 STAGE_EMBEDDINGS = "embeddings"  # vista de fragmentación (acceso opcional)
 
 # Rúbricas disponibles. Por ahora solo UPAO; el dropdown del sidebar la elige.
-# El número de ítems es placeholder hasta que se concrete la rúbrica real (Sprint 3).
 RUBRICS = {
     "upao_ing_sistemas": {
         "label":   "UPAO · Ing. Sistemas",
@@ -158,7 +157,7 @@ def init_session_state() -> None:
         # pdf
         "pdf_uploaded":          False,
         "pdf_filename":          "",
-        "pdf_sections":          {},     # legacy keyword-based dict
+        "pdf_sections":          {},     # detección keyword-based (fallback)
         "pdf_outline":           [],     # outline jerárquico (1.1.1) — alimentado por /upload-pdf
         "pdf_chunks_total":      0,
         "custom_rubric_filename": "",     # Paso 2: PDF de rúbrica opcional (solo nombre, no procesado)
@@ -167,8 +166,9 @@ def init_session_state() -> None:
         "last_question":   "",
         # historial (preexistente — preservado por compatibilidad)
         "query_history":   [],
-        # Biblioteca Metodológica — alimentado por Phase 6 con datos reales
-        # del endpoint /api/v1/reference-books. None hasta primer fetch.
+        # Biblioteca Metodológica — None hasta el primer fetch del endpoint
+        # /api/v1/reference-books (en render_sidebar). Tras eso, lista de
+        # {source, title, fragments} con los libros indexados.
         "reference_books": None,
     }
     for key, default in defaults.items():
@@ -210,7 +210,7 @@ def mark_pdf_uploaded(
 
     Args:
         filename:     nombre original del PDF.
-        sections:     dict keyword-based (legacy, conteo por categoría).
+        sections:     dict keyword-based (fallback, conteo por categoría).
         chunks_total: total de chunks almacenados en ChromaDB.
         outline:      lista de encabezados jerárquicos (1.1.1) con
                       chunks_count y chars_count. Vacía si el PDF no
@@ -324,33 +324,6 @@ def api_reference_books():
 # ─────────────────────────────────────────────
 #  COMPONENTES REUTILIZABLES
 # ─────────────────────────────────────────────
-def render_health_badge():
-    """Muestra estado del sistema en la barra lateral (versión verbose, legacy).
-
-    DEPRECATED: reemplazada por render_health_badge_compact() dentro de
-    render_sidebar(). Se conserva por compatibilidad y para no romper
-    referencias durante el refactor del Sprint 1.
-    """
-    health = api_health()
-    if health is None:
-        st.sidebar.error("⛔ Backend no inicializado")
-        st.sidebar.caption("Recarga la página; si persiste, revisa los Secrets en Streamlit Cloud.")
-        return False
-
-    comps = health.get("components", {})
-    chroma_chunks = comps.get("chromadb", {}).get("chunks_stored", 0)
-    flowise_ok = comps.get("flowise", {}).get("reachable", False)
-    mode = health.get("execution_mode", "?")
-
-    st.sidebar.success("✅ Backend conectado")
-    st.sidebar.metric("Chunks en ChromaDB", chroma_chunks)
-
-    flowise_status = "🟢 Activo" if flowise_ok else "🔴 Sin conexión"
-    st.sidebar.caption(f"Flowise: {flowise_status}")
-    st.sidebar.caption(f"Modo: **{mode}**")
-    return True
-
-
 def render_health_badge_compact() -> bool:
     """Versión compacta del health badge — vive dentro de render_sidebar()."""
     health = api_health()
@@ -366,9 +339,10 @@ def render_health_badge_compact() -> bool:
     return True
 
 
-# Lista placeholder de los 4 PDFs metodológicos de referencia.
-# Phase 6 reemplaza esto con datos reales leídos desde el endpoint
-# /api/v1/reference-books (que indexa los PDFs en una colección Chroma aparte).
+# Fallback de la Biblioteca Metodológica para cuando el endpoint
+# /api/v1/reference-books devuelve vacío (colección Chroma no indexada).
+# Muestra los nombres de los libros como guía con la nota "indexación
+# pendiente"; render_sidebar pisa esto con datos reales en el primer fetch.
 _REFERENCE_BOOKS_PLACEHOLDER = [
     {"title": "METODOLOGIA DE LA INVESTIGACION CUANTITATIVA-CUALITATIVA Y REDACCION DE LA TESIS", "fragments": None},
     {"title": "METODOLOGIA DE LA INVESTIGACION-GUIA PARA EL PROYECTO DE TESIS",                   "fragments": None},
@@ -518,8 +492,8 @@ def _render_fragmentation_table(
 
     elif sections_found:
         # Fallback: sin info de página/chars por sección, solo conteo de chunks.
-        # Cuando llega Sprint 3, este caso debería ser raro (la mayoría de
-        # tesis tiene numeración 1.1.1).
+        # Caso raro: la mayoría de las tesis usan numeración 1.1.1 y caen
+        # en la rama del outline. Si llegamos acá es un PDF sin numeración.
         rows = [
             {
                 "Sección": SECTION_LABELS.get(k, k),
@@ -570,8 +544,8 @@ def _render_rubrica_step() -> None:
     Paso 2 — Rúbrica de evaluación (opcional).
 
     El usuario puede subir un PDF de su rúbrica personalizada. Por ahora
-    el archivo NO se procesa (solo se guarda el nombre en session_state).
-    Sprint 4 lo vectorizará y lo inyectará como contexto adicional.
+    el archivo NO se procesa (solo se guarda el nombre en session_state);
+    una iteración futura puede vectorizarlo e inyectarlo como contexto.
     """
     rubric = RUBRICS.get(st.session_state.get("rubric_id", "upao_ing_sistemas"), {})
     rubric_label = rubric.get("label",   "—")
@@ -1028,7 +1002,7 @@ _AGENT_LABEL_TO_KEY = {
     "metodologico":          "metodologico",
     "metodológico":          "metodologico",
     "mentor final":          "mentor_final",
-    # Labels nuevos (post-rename Sprint 4)
+    # Labels nuevos (post-rename: Supervisor / Metodólogo / Síntesis y Consenso)
     "supervisor":            "mentor_intake",
     "investigador":          "investigador",
     "auditor":               "auditor",
@@ -1042,10 +1016,9 @@ _AGENT_LABEL_TO_KEY = {
 }
 
 # Mapeo de state-keys (formato 'returnCustomStateValues' del End node) →
-# agent-keys del frontend. Habilitado por Commit 4 del Sprint 3: el End
-# node devuelve directamente el flow state en lugar de sólo el último
-# output, así que el frontend lee los 6 agentes con un único parseo en
-# vez de caminar agentFlowExecutedData.
+# agent-keys del frontend. Con el End node devolviendo todo el flow state,
+# el frontend lee los 6 agentes con un único parseo en vez de caminar
+# agentFlowExecutedData.
 _STATE_KEY_TO_AGENT = {
     "intake_result":     "mentor_intake",
     "research_findings": "investigador",
@@ -1102,10 +1075,10 @@ def _extract_agent_outputs(raw_result: dict) -> dict:
     if not isinstance(flowise_resp, dict):
         return outputs
 
-    # ── Estrategia A — formato nuevo (Sprint 3 Commit 4) ────────────────
-    # El End node 'returnCustomStateValues' devuelve un dict con las state
-    # keys (intake_result, research_findings, etc.) directamente serializado
-    # en flowise_response['text']. Cada valor es a su vez un JSON string.
+    # ── Estrategia A — End node 'returnCustomStateValues' ──────────────
+    # Devuelve un dict con las state keys (intake_result, research_findings,
+    # etc.) directamente serializado en flowise_response['text']. Cada
+    # valor es a su vez un JSON string.
     state_dict = _parse_maybe_json(flowise_resp.get("text") or "")
     if isinstance(state_dict, dict) and any(k in state_dict for k in _STATE_KEY_TO_AGENT):
         for state_key, agent_key in _STATE_KEY_TO_AGENT.items():

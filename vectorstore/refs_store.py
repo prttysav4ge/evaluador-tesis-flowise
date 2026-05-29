@@ -8,7 +8,7 @@ con fragmentos de los libros de consulta.
 Usado por:
   - scripts/index_reference_books.py — indexa los PDFs una sola vez.
   - routes/reference_books.py        — endpoint que alimenta el sidebar.
-  - (Sprint 4) routes/query.py       — retrieval cruzado tesis + libros.
+  - routes/query.py                  — retrieval cruzado tesis + libros.
 """
 from __future__ import annotations
 

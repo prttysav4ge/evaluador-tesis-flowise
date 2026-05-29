@@ -1,5 +1,5 @@
 """
-Métricas NLP — Sprint 3.
+Métricas NLP.
 
 Compara el texto original analizado (la sección de tesis recuperada del PDF)
 contra el texto sugerido por el pipeline (output del Redactor / generate_texto_sugerido).
