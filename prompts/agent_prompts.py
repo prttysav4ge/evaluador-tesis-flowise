@@ -53,9 +53,22 @@ RESPONDE ÚNICAMENTE en formato JSON válido, sin texto adicional antes ni despu
 # ====================================================================== #
 
 def build_investigador_prompt(
-    question: str, context: str, memory: Dict[str, Any]
+    question: str,
+    context: str,
+    memory: Dict[str, Any],
+    reference_context: str = "",
 ) -> str:
     mentor_summary = json.dumps(memory.get("mentor_intake", {}), ensure_ascii=False)
+    refs_block = (
+        f"\n=== BIBLIOTECA METODOLÓGICA (libros de referencia) ===\n{reference_context}\n"
+        if reference_context else ""
+    )
+    refs_instr = (
+        "6. Si la Biblioteca aporta principios relevantes, citalos al respaldar tus "
+        "observaciones (ej. 'según Hernández Sampieri...'). Privilegia la coincidencia "
+        "entre lo que dice la tesis y lo que recomienda la literatura metodológica.\n"
+        if reference_context else ""
+    )
     return f"""Eres el AGENTE INVESTIGADOR especializado en análisis de investigación académica.
 
 ROL: Analizar la calidad investigativa del fragmento de tesis.
@@ -65,7 +78,7 @@ ROL: Analizar la calidad investigativa del fragmento de tesis.
 
 === CONTEXTO DE LA TESIS ===
 {context}
-
+{refs_block}
 === EVALUACIÓN PREVIA (Mentor Intake) ===
 {mentor_summary}
 
@@ -75,7 +88,7 @@ ROL: Analizar la calidad investigativa del fragmento de tesis.
 3. Identifica fortalezas y debilidades investigativas concretas.
 4. Sugiere 2-3 mejoras específicas y realizables.
 5. Asigna una puntuación de 0 a 10.
-
+{refs_instr}
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{
   "fortalezas": ["fortaleza1", "fortaleza2"],
@@ -84,7 +97,8 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
   "relevancia_cientifica": "alta|media|baja",
   "sugerencias": ["sugerencia1", "sugerencia2"],
   "puntuacion": 7.5,
-  "comentario": "análisis investigativo en 2-3 oraciones"
+  "comentario": "análisis investigativo en 2-3 oraciones",
+  "biblioteca_aplicada": ["principio/cita del libro X usado", "..."]
 }}"""
 
 
@@ -137,11 +151,24 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
 # ====================================================================== #
 
 def build_metodologico_prompt(
-    question: str, context: str, memory: Dict[str, Any]
+    question: str,
+    context: str,
+    memory: Dict[str, Any],
+    reference_context: str = "",
 ) -> str:
     prev_summary = json.dumps(
         {k: memory[k] for k in ["mentor_intake", "investigador", "auditor"] if k in memory},
         ensure_ascii=False,
+    )
+    refs_block = (
+        f"\n=== BIBLIOTECA METODOLÓGICA (libros de referencia) ===\n{reference_context}\n"
+        if reference_context else ""
+    )
+    refs_instr = (
+        "6. CRÍTICO: contrasta lo que hace la tesis con las recomendaciones de los libros "
+        "de la Biblioteca. Si difieren, indícalo explícitamente. Si coinciden, refuerza la "
+        "evaluación citando la fuente. La Biblioteca es tu fuente de verdad metodológica.\n"
+        if reference_context else ""
     )
     return f"""Eres el AGENTE METODOLÓGICO especializado en marcos y diseños de investigación científica.
 
@@ -152,7 +179,7 @@ ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesi
 
 === CONTEXTO DE LA TESIS ===
 {context}
-
+{refs_block}
 === EVALUACIONES PREVIAS ===
 {prev_summary}
 
@@ -162,7 +189,7 @@ ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesi
 3. Analiza instrumentos o técnicas de recolección mencionados.
 4. Identifica limitaciones metodológicas explícitas o implícitas.
 5. Sugiere ajustes metodológicos concretos.
-
+{refs_instr}
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{
   "enfoque": "cualitativo|cuantitativo|mixto|no_especificado",
@@ -173,7 +200,9 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
   "limitaciones_metodologicas": ["limitacion1"],
   "sugerencias_metodologicas": ["sugerencia1"],
   "puntuacion_metodologia": 7.0,
-  "comentario": "análisis metodológico en 2-3 oraciones"
+  "comentario": "análisis metodológico en 2-3 oraciones",
+  "alineacion_con_biblioteca": "alta|media|baja|no_aplica",
+  "citas_biblioteca": ["principio metodológico usado del libro X", "..."]
 }}"""
 
 

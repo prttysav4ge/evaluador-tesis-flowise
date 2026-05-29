@@ -321,9 +321,11 @@ async def run_sequential_pipeline(
     memory["mentor_intake"] = await _run_agent("mentor_intake", prompt_1, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 2 — Investigador                                            #
+    #  Agente 2 — Investigador (con Biblioteca cruzada)                   #
     # ------------------------------------------------------------------ #
-    prompt_2 = build_investigador_prompt(question, retrieved_context, memory)
+    prompt_2 = build_investigador_prompt(
+        question, retrieved_context, memory, reference_context=reference_context
+    )
     memory["investigador"] = await _run_agent("investigador", prompt_2, llm)
 
     # ------------------------------------------------------------------ #
@@ -333,9 +335,11 @@ async def run_sequential_pipeline(
     memory["auditor"] = await _run_agent("auditor", prompt_3, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 4 — Metodológico                                            #
+    #  Agente 4 — Metodológico (con Biblioteca cruzada — agente clave)    #
     # ------------------------------------------------------------------ #
-    prompt_4 = build_metodologico_prompt(question, retrieved_context, memory)
+    prompt_4 = build_metodologico_prompt(
+        question, retrieved_context, memory, reference_context=reference_context
+    )
     memory["metodologico"] = await _run_agent("metodologico", prompt_4, llm)
 
     # ------------------------------------------------------------------ #
