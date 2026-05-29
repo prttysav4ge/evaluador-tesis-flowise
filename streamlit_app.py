@@ -1255,51 +1255,99 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
 
 def _render_tab_debate(agents: dict, final_data: dict) -> None:
     """
-    Pestaña 2 — Debate (mapeo provisional con los 6 agentes actuales).
+    Pestaña 2 — Debate del panel multiagente.
 
-    Hasta Sprint 4 los nodos no producen Consenso/Disenso explícitos, por
-    lo que mapeamos:
-      - Perspectiva Formal       = Auditor
-      - Perspectiva Metodológica = Metodológico
-      - Perspectiva Contextual   = Investigador
-      - Síntesis                 = Mentor Final
+    Si la Síntesis produjo los bloques nuevos (final_data['debate'],
+    'consenso', 'disenso'), los usamos como fuente primaria. Si no
+    (modelo viejo, parsing parcial), caemos al mapeo derivado de los
+    agentes individuales como en versiones previas.
     """
-    st.caption(
-        "_Mapeo provisional desde los 6 agentes actuales. Consenso/Disenso "
-        "explícitos llegan al rediseñar agentes (Sprint 4)._"
-    )
+    debate    = final_data.get("debate") if isinstance(final_data, dict) else None
+    consenso  = final_data.get("consenso") if isinstance(final_data, dict) else None
+    disenso   = final_data.get("disenso")  if isinstance(final_data, dict) else None
 
+    structured = isinstance(debate, dict) and (consenso is not None or disenso is not None)
+
+    # Helper: muestra el texto de una perspectiva. Prefiere la versión
+    # narrada por la Síntesis; cae al output crudo del agente individual.
+    def _perspective_text(narrated: str, raw_agent: dict) -> str:
+        if narrated:
+            return narrated
+        if not raw_agent:
+            return "— Sin output disponible."
+        return (
+            raw_agent.get("comentario")
+            or raw_agent.get("evaluacion")
+            or raw_agent.get("evaluacion_inicial")
+            or raw_agent.get("mensaje_pedagogico")
+            or raw_agent.get("resumen_ejecutivo")
+            or ""
+        )
+
+    if structured:
+        st.caption("_Debate sintetizado por el agente de Síntesis y Consenso._")
+    else:
+        st.caption(
+            "_La Síntesis no produjo bloques debate/consenso/disenso; "
+            "mostramos el output crudo de cada agente del panel._"
+        )
+
+    # ── 4 perspectivas ──────────────────────────────────────────────────
     perspectives = [
-        ("📐 Perspectiva Formal",       agents.get("auditor",       {}), "rigor académico, normas, citas"),
-        ("🧪 Perspectiva Metodológica", agents.get("metodologico",  {}), "diseño, instrumentos, validez"),
-        ("🔬 Perspectiva Contextual",   agents.get("investigador",  {}), "antecedentes, estado del arte"),
-        ("🧭 Síntesis",                  agents.get("mentor_final",  {}) or final_data, "integración del debate"),
+        ("📐 Perspectiva Formal",
+         (debate.get("perspectiva_formal", "") if isinstance(debate, dict) else ""),
+         agents.get("auditor", {}),
+         "rigor académico, normas, citas — voz del Auditor"),
+        ("🧪 Perspectiva Metodológica",
+         (debate.get("perspectiva_metodologica", "") if isinstance(debate, dict) else ""),
+         agents.get("metodologico", {}),
+         "diseño, instrumentos, validez — voz del Metodólogo"),
+        ("🔬 Perspectiva Contextual",
+         (debate.get("perspectiva_contextual", "") if isinstance(debate, dict) else ""),
+         agents.get("investigador", {}),
+         "antecedentes, estado del arte — voz del Investigador"),
+        ("🧭 Síntesis",
+         (debate.get("sintesis", "") if isinstance(debate, dict) else ""),
+         final_data,
+         "integración de las 3 perspectivas"),
     ]
 
-    for label, data, hint in perspectives:
+    for label, narrated, raw_agent, hint in perspectives:
         with st.expander(label, expanded=False):
             st.caption(f"_{hint}_")
-            if not data:
-                st.caption("— Sin output disponible.")
-                continue
-            comentario = (
-                data.get("comentario")
-                or data.get("evaluacion")
-                or data.get("evaluacion_inicial")
-                or data.get("mensaje_pedagogico")
-                or data.get("resumen_ejecutivo")
-                or ""
-            )
-            if comentario:
-                st.markdown(comentario)
+            text = _perspective_text(narrated, raw_agent)
+            if text:
+                st.markdown(text)
             else:
-                st.json(data)
+                st.caption("— Sin output disponible.")
 
     st.markdown("---")
-    st.markdown("**🟢 Consenso**")
-    st.caption("_Disponible al rediseñar agentes (Sprint 4 — re-etiquetado del Mentor Final como 'Síntesis y Consenso')._")
-    st.markdown("**🔴 Disenso**")
-    st.caption("_Disponible al rediseñar agentes (Sprint 4)._")
+
+    # ── Consenso ────────────────────────────────────────────────────────
+    st.markdown("### 🟢 Consenso")
+    if consenso:
+        for c in consenso:
+            st.markdown(f"- {c}")
+    elif structured:
+        st.caption("_La Síntesis no detectó puntos de consenso explícitos._")
+    else:
+        st.caption(
+            "_Sin bloque de consenso en la respuesta. "
+            "Disponible cuando la Síntesis produce el JSON extendido._"
+        )
+
+    # ── Disenso ─────────────────────────────────────────────────────────
+    st.markdown("### 🔴 Disenso")
+    if disenso:
+        for d in disenso:
+            st.markdown(f"- {d}")
+    elif structured:
+        st.caption("_La Síntesis no detectó puntos de disenso — las 3 perspectivas concuerdan._")
+    else:
+        st.caption(
+            "_Sin bloque de disenso en la respuesta. "
+            "Disponible cuando la Síntesis produce el JSON extendido._"
+        )
 
 
 def _render_tab_rag(result: dict) -> None:
@@ -1495,32 +1543,64 @@ def _fmt(v: Any) -> str:
 def _build_debate_markdown(agents: dict, final_data: dict) -> str:
     """Genera el markdown descargable de la Pestaña 2 (Debate)."""
     import json as _json
+
     lines = ["# Debate Multiagente", ""]
+
+    # Bloques del agente de Síntesis (si los produjo). Si no, derivamos
+    # de los outputs crudos de Auditor / Metodólogo / Investigador.
+    debate   = final_data.get("debate")   if isinstance(final_data, dict) else None
+    consenso = final_data.get("consenso") if isinstance(final_data, dict) else None
+    disenso  = final_data.get("disenso")  if isinstance(final_data, dict) else None
+
+    def _pick(narrated: str, agent: dict, raw_keys: list[str]) -> str:
+        if narrated:
+            return narrated
+        if not agent:
+            return "_(sin output disponible)_"
+        for k in raw_keys:
+            v = agent.get(k)
+            if v:
+                return v
+        return "```json\n" + _json.dumps(agent, ensure_ascii=False, indent=2) + "\n```"
+
     perspectives = [
-        ("Perspectiva Formal (Auditor)",       agents.get("auditor",      {})),
-        ("Perspectiva Metodológica (Metodólogo)", agents.get("metodologico", {})),
-        ("Perspectiva Contextual (Investigador)", agents.get("investigador", {})),
-        ("Síntesis (Mentor Final)",            agents.get("mentor_final", {}) or final_data),
+        ("Perspectiva Formal (Auditor)",
+         debate.get("perspectiva_formal", "") if isinstance(debate, dict) else "",
+         agents.get("auditor", {})),
+        ("Perspectiva Metodológica (Metodólogo)",
+         debate.get("perspectiva_metodologica", "") if isinstance(debate, dict) else "",
+         agents.get("metodologico", {})),
+        ("Perspectiva Contextual (Investigador)",
+         debate.get("perspectiva_contextual", "") if isinstance(debate, dict) else "",
+         agents.get("investigador", {})),
+        ("Síntesis (panel)",
+         debate.get("sintesis", "") if isinstance(debate, dict) else "",
+         final_data),
     ]
-    for label, data in perspectives:
+    for label, narrated, raw_agent in perspectives:
         lines.append(f"## {label}")
-        if not data:
-            lines.append("_(sin output disponible)_")
-        else:
-            comentario = (
-                data.get("comentario")
-                or data.get("evaluacion")
-                or data.get("evaluacion_inicial")
-                or data.get("mensaje_pedagogico")
-                or ""
-            )
-            if comentario:
-                lines.append(comentario)
-            else:
-                lines.append("```json\n" + _json.dumps(data, ensure_ascii=False, indent=2) + "\n```")
+        lines.append(_pick(
+            narrated, raw_agent,
+            ["comentario", "evaluacion", "evaluacion_inicial", "mensaje_pedagogico", "resumen_ejecutivo"],
+        ))
         lines.append("")
-    lines.append("---")
-    lines.append("_Consenso/Disenso: disponibles al rediseñar agentes (Sprint 4)._")
+
+    lines.append("## Consenso")
+    if consenso:
+        for c in consenso:
+            lines.append(f"- {c}")
+    else:
+        lines.append("_(no detectado por la Síntesis)_")
+    lines.append("")
+
+    lines.append("## Disenso")
+    if disenso:
+        for d in disenso:
+            lines.append(f"- {d}")
+    else:
+        lines.append("_(las 3 perspectivas concuerdan o la Síntesis no detectó disenso)_")
+    lines.append("")
+
     return "\n".join(lines)
 
 
