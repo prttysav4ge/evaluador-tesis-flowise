@@ -1022,19 +1022,23 @@ def render_flowise_answer(answer_text: str):
 # Mapeo nombre-de-agente → etiqueta normalizada usada en los 6 agentes Python
 # y en los nodos del Agentflow Flowise (que comparten labels casi 1:1).
 _AGENT_LABEL_TO_KEY = {
-    "mentor intake":     "mentor_intake",
-    "supervisor":        "mentor_intake",   # alias futuro (Sprint 4 re-etiquetado)
-    "investigador":      "investigador",
-    "auditor":           "auditor",
-    "metodologico":      "metodologico",
-    "metodológico":      "metodologico",
-    "metodologo":        "metodologico",
-    "metodólogo":        "metodologico",
-    "redactor":          "redactor",
-    "mentor final":      "mentor_final",
-    "sintesis":          "mentor_final",
-    "síntesis":          "mentor_final",
-    "sintesis y consenso": "mentor_final",
+    # Labels viejos (pre-rename) — mantenidos por backward compat con Flowise Cloud
+    # mientras no se re-importe el JSON actualizado.
+    "mentor intake":         "mentor_intake",
+    "metodologico":          "metodologico",
+    "metodológico":          "metodologico",
+    "mentor final":          "mentor_final",
+    # Labels nuevos (post-rename Sprint 4)
+    "supervisor":            "mentor_intake",
+    "investigador":          "investigador",
+    "auditor":               "auditor",
+    "metodologo":            "metodologico",
+    "metodólogo":            "metodologico",
+    "redactor":              "redactor",
+    "sintesis":              "mentor_final",
+    "síntesis":              "mentor_final",
+    "sintesis y consenso":   "mentor_final",
+    "síntesis y consenso":   "mentor_final",
 }
 
 # Mapeo de state-keys (formato 'returnCustomStateValues' del End node) →
@@ -1220,7 +1224,7 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
             if not comentario:
                 st.json(redactor)
 
-    # ── Recomendaciones generales (Metodológico + Mentor Final) ─────────
+    # ── Recomendaciones generales (Metodólogo + Síntesis) ──────────────
     st.subheader("🎯 Recomendaciones generales")
     metodo = agents.get("metodologico", {})
     metodo_recs = metodo.get("recomendaciones", []) or metodo.get("sugerencias", [])
@@ -1233,7 +1237,7 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
             st.markdown(f"- {r}")
 
     if final_recs:
-        st.markdown("**Priorizadas (del Mentor Final):**")
+        st.markdown("**Priorizadas (de la Síntesis):**")
         for rec in sorted(final_recs, key=lambda r: r.get("prioridad", 99) if isinstance(r, dict) else 99):
             if isinstance(rec, dict):
                 pri = rec.get("prioridad", "—")
@@ -1359,7 +1363,7 @@ def _render_tab_rag(result: dict) -> None:
             "_Pasajes recuperados de la tesis a la izquierda contrastados con "
             "los pasajes relevantes de la biblioteca metodológica a la derecha. "
             "Estos son los inputs reales que vieron los agentes Investigador y "
-            "Metodológico para producir el análisis._"
+            "Metodólogo para producir el análisis._"
         )
         col_tesis, col_refs = st.columns(2, gap="medium")
         with col_tesis:

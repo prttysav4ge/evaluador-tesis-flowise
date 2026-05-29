@@ -165,7 +165,7 @@
       "position": { "x": 480.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_0",
-        "label": "Mentor Intake",
+        "label": "Supervisor",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
@@ -189,7 +189,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el MENTOR INTAKE de un sistema de evaluación de tesis universitarias.\n\nROL: Hacer la evaluación inicial del contexto recuperado de la tesis y la pregunta del evaluador.\n\nIMPORTANTE:\n- El contexto ya fue recuperado por RAG desde ChromaDB por el backend Python\n- NO necesitas buscar información adicional\n- Analiza SOLO el contexto proporcionado\n- Devuelve ÚNICAMENTE JSON válido, sin texto adicional"
+              "content": "Eres el SUPERVISOR de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Hacer el triage inicial del contexto recuperado de la tesis y la pregunta del evaluador, y delimitar qué van a evaluar los demás agentes del panel (Investigador, Auditor, Metodólogo, Redactor, Síntesis).\n\nIMPORTANTE:\n- El contexto ya fue recuperado por RAG desde ChromaDB por el backend Python\n- NO necesitas buscar información adicional\n- Analiza SOLO el contexto proporcionado\n- Devuelve ÚNICAMENTE JSON válido, sin texto adicional"
             }
           ],
           "llmEnableMemory": true,
@@ -348,7 +348,7 @@
       "position": { "x": 1290.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_3",
-        "label": "Metodológico",
+        "label": "Metodólogo",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
@@ -372,7 +372,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el AGENTE METODOLÓGICO de un sistema de evaluación de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia. CRÍTICO: si recibes contexto de la BIBLIOTECA METODOLÓGICA, ésta es tu fuente de verdad metodológica — contrasta lo que hace la tesis con lo que recomienda la literatura (Hernández Sampieri, Tamayo, etc.).\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el METODÓLOGO de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia. CRÍTICO: si recibes contexto de la BIBLIOTECA METODOLÓGICA, ésta es tu fuente de verdad metodológica — contrasta lo que hace la tesis con lo que recomienda la literatura (Hernández Sampieri, Tamayo, etc.).\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -470,7 +470,7 @@
       "position": { "x": 1830.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_5",
-        "label": "Mentor Final",
+        "label": "Síntesis y Consenso",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
