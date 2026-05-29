@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from vectorstore.chroma_store import chroma_store
+from vectorstore.refs_store import refs_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -57,6 +58,8 @@ class QueryResponse(BaseModel):
     chunks_retrieved: int
     elapsed_seconds: float
     context_preview: str
+    reference_chunks_retrieved: int = 0
+    reference_context_preview: str  = ""
     result: Dict[str, Any]
 
 
@@ -118,18 +121,53 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     retrieved_context = chroma_store.format_context(raw_results)
     context_preview = retrieved_context[:300] + "…" if len(retrieved_context) > 300 else retrieved_context
 
-    logger.info(f"📚 Fragmentos recuperados: {len(raw_results)}")
+    logger.info(f"📚 Fragmentos recuperados (tesis): {len(raw_results)}")
+
+    # ------------------------------------------------------------------ #
+    #  2b. Retrieval cruzado contra Biblioteca Metodológica               #
+    # ------------------------------------------------------------------ #
+    # Recuperamos fragmentos de los libros metodológicos usando la misma
+    # pregunta. Si la biblioteca está vacía o falla, el pipeline sigue
+    # funcionando con solo el contexto de la tesis (degradación graciosa).
+    refs_raw: list[Dict[str, Any]] = []
+    reference_context: str = ""
+    try:
+        if refs_store.collection.count() > 0:
+            refs_raw = refs_store.query(body.question, top_k=_REFS_TOP_K)
+            reference_context = _format_refs_context(refs_raw)
+            logger.info(f"📖 Fragmentos recuperados (biblioteca): {len(refs_raw)}")
+    except Exception as exc:
+        logger.warning(f"⚠️  Retrieval de biblioteca falló (continuando sin refs): {exc}")
+        refs_raw = []
+        reference_context = ""
+
+    reference_context_preview = (
+        reference_context[:300] + "…" if len(reference_context) > 300 else reference_context
+    )
 
     # ------------------------------------------------------------------ #
     #  3. Agentes                                                          #
     # ------------------------------------------------------------------ #
     if settings.USE_FLOWISE:
         result, mode = await _call_flowise_with_fallback(
-            body.question, retrieved_context, body.session_id
+            body.question, retrieved_context, reference_context, body.session_id
         )
     else:
         mode = "python_agents"
-        result = await _call_python_agents(body.question, retrieved_context)
+        result = await _call_python_agents(body.question, retrieved_context, reference_context)
+
+    # Adjuntamos contexto cruzado al resultado para que el frontend lo
+    # use en la sub-pestaña 'De libros de referencia' / 'Contexto cruzado'.
+    result["reference_context"] = reference_context
+    result["reference_chunks"]  = [
+        {
+            "text":   r.get("text", ""),
+            "source": r.get("metadata", {}).get("source", "?"),
+            "page":   r.get("metadata", {}).get("page", "?"),
+            "score":  r.get("score"),
+        }
+        for r in refs_raw
+    ]
 
     # ------------------------------------------------------------------ #
     #  4. Generar texto sugerido (post-pipeline, ambos modos)            #
@@ -172,6 +210,8 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
         chunks_retrieved=len(raw_results),
         elapsed_seconds=elapsed,
         context_preview=context_preview,
+        reference_chunks_retrieved=len(refs_raw),
+        reference_context_preview=reference_context_preview,
         result=result,
     )
 
@@ -179,6 +219,30 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
 # ====================================================================== #
 #  Helpers privados                                                       #
 # ====================================================================== #
+
+# Cantidad de fragmentos de la Biblioteca Metodológica a recuperar por consulta.
+# Más bajo que el TOP_K de la tesis para no inflar el prompt de los agentes.
+_REFS_TOP_K = 3
+
+
+def _format_refs_context(refs_results: list) -> str:
+    """
+    Formatea los chunks recuperados de la Biblioteca Metodológica con
+    atribución (libro + página) en lugar de 'sección detectada'.
+    """
+    if not refs_results:
+        return ""
+    parts: list = []
+    for i, r in enumerate(refs_results, 1):
+        meta = r.get("metadata", {}) or {}
+        source = meta.get("source", "?")
+        page   = meta.get("page", "?")
+        parts.append(
+            f"[Biblioteca | Fragmento {i} | Libro: {source} | p.{page}]\n"
+            f"{r.get('text', '')}"
+        )
+    return "\n\n---\n\n".join(parts)
+
 
 _FLOWISE_FILE_ERROR = "filePath"   # señal de nodo con archivo local roto en cloud
 
@@ -203,12 +267,18 @@ def _is_transient_flowise_error(exc_msg: str) -> bool:
 async def _call_flowise_with_fallback(
     question: str,
     context: str,
+    reference_context: str,
     session_id: Optional[str],
 ) -> tuple[Dict[str, Any], str]:
     """
     Intenta llamar a Flowise. Si devuelve un error recuperable (nodo con
     archivo local roto, timeout 504, gateway caído), hace fallback automático
     a los agentes Python. Retorna (result_dict, mode_str).
+
+    Args:
+        reference_context: contexto de la Biblioteca Metodológica (libros).
+            Se inyecta en el JSON payload que parsea el CustomFunction de
+            Flowise para que los agentes lo lean desde el Flow State.
     """
     from flowise.client import flowise_client
 
@@ -216,6 +286,7 @@ async def _call_flowise_with_fallback(
         response = await flowise_client.call_chatflow(
             question=question,
             context=context,
+            reference_context=reference_context,
             session_id=session_id,
         )
         return {"flowise_response": response}, "flowise"
@@ -231,7 +302,7 @@ async def _call_flowise_with_fallback(
                 "que no existe en Flowise Cloud. "
                 "Haciendo fallback a agentes Python automáticamente."
             )
-            result = await _call_python_agents(question, context)
+            result = await _call_python_agents(question, context, reference_context)
             result["_flowise_fallback"] = (
                 "Flowise Cloud falló (nodo con archivo local roto). "
                 "Se usaron los agentes Python como fallback."
@@ -244,7 +315,7 @@ async def _call_flowise_with_fallback(
                 "⚠️  Flowise Cloud devolvió error transitorio (timeout/gateway). "
                 "Haciendo fallback a agentes Python automáticamente."
             )
-            result = await _call_python_agents(question, context)
+            result = await _call_python_agents(question, context, reference_context)
             result["_flowise_fallback"] = (
                 "Flowise Cloud no respondió a tiempo (504/502/503). "
                 "Se usaron los agentes Python como fallback."
@@ -269,7 +340,7 @@ async def _call_flowise_with_fallback(
             f"⚠️  Flowise Cloud inaccesible ({exc_type}). "
             "Haciendo fallback a agentes Python automáticamente."
         )
-        result = await _call_python_agents(question, context)
+        result = await _call_python_agents(question, context, reference_context)
         result["_flowise_fallback"] = (
             f"Flowise Cloud inaccesible ({exc_type}). "
             "Se usaron los agentes Python como fallback."
@@ -293,11 +364,12 @@ async def _call_flowise_with_fallback(
 async def _call_python_agents(
     question: str,
     context: str,
+    reference_context: str = "",
 ) -> Dict[str, Any]:
     from services.agent_service import run_sequential_pipeline
 
     try:
-        return await run_sequential_pipeline(question, context)
+        return await run_sequential_pipeline(question, context, reference_context)
     except Exception as exc:
         logger.exception("Error en pipeline de agentes Python")
         raise HTTPException(

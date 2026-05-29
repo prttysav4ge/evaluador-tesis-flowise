@@ -282,9 +282,16 @@ async def _run_agent(
 async def run_sequential_pipeline(
     question: str,
     retrieved_context: str,
+    reference_context: str = "",
 ) -> Dict[str, Any]:
     """
     Ejecuta los 6 agentes secuencialmente con memoria acumulativa.
+
+    Args:
+        retrieved_context: fragmentos relevantes del PDF de tesis (RAG primario).
+        reference_context: fragmentos de la Biblioteca Metodológica (RAG cruzado).
+            Vacío si la biblioteca no está poblada. Commit 3 del enchufe actualiza
+            los prompts de Investigador y Metodológico para que lo usen.
 
     La memoria se va enriqueciendo con la salida de cada agente.
     Cada agente recibe solo el resumen de los agentes anteriores

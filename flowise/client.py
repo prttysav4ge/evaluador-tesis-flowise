@@ -93,33 +93,48 @@ class FlowiseClient:
         )
         return context[:max_chars]
 
-    def _build_question_payload(self, question: str, context: str) -> str:
+    def _build_question_payload(
+        self,
+        question: str,
+        context: str,
+        reference_context: str = "",
+    ) -> str:
         """
         Construye el JSON string que el CustomFunction `initializeFlowState`
         espera parsear desde `$flow.input`.
 
         El CustomFunction hace:
             data = JSON.parse($flow.input)
-            → data.section_type      → $flow.state.current_section_type
-            → data.section_text      → $flow.state.student_input
-            → data.retrieved_context → $flow.state.retrieved_context  ← RAG
-            → data.research_line     → $flow.state.validated_research_line
-            → data.match_type        → $flow.state.research_line_match_type
+            → data.section_type        → $flow.state.current_section_type
+            → data.section_text        → $flow.state.student_input
+            → data.retrieved_context   → $flow.state.retrieved_context    ← RAG tesis
+            → data.reference_context   → $flow.state.reference_context    ← RAG biblioteca
+            → data.research_line       → $flow.state.validated_research_line
+            → data.match_type          → $flow.state.research_line_match_type
         """
+        # Truncamos el reference_context con un cap más bajo que el de la tesis
+        # (60% del cap principal) para no inflar demasiado el prompt total.
+        # Los agentes que lo usen igual deben tratarlo como contexto secundario.
+        from app.config import settings
+        refs_cap = max(int(settings.FLOWISE_MAX_CONTEXT_CHARS * 0.6), 600)
+
         payload_data = {
-            "section_type": "rag_query",                   # identifica que vino del backend RAG
-            "section_text": question,                      # pregunta del evaluador
-            "retrieved_context": self._truncate_context(context),  # ← fragmentos de ChromaDB (truncado)
-            "research_line": "",                           # sin línea de investigación por ahora
-            "match_type": "semantic_similarity",           # tipo de retrieval usado
+            "section_type":      "rag_query",
+            "section_text":      question,
+            "retrieved_context": self._truncate_context(context),
+            "reference_context": (
+                reference_context[:refs_cap] if reference_context else ""
+            ),
+            "research_line":     "",
+            "match_type":        "semantic_similarity",
         }
-        # El Agentflow recibe esto como string y lo parsea con JSON.parse()
         return json.dumps(payload_data, ensure_ascii=False)
 
     async def call_chatflow(
         self,
         question: str,
         context: str,
+        reference_context: str = "",
         session_id: Optional[str] = None,
         override_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -143,7 +158,7 @@ class FlowiseClient:
             )
 
         # El Agentflow espera el question como JSON serializado como string
-        question_json = self._build_question_payload(question, context)
+        question_json = self._build_question_payload(question, context, reference_context)
 
         payload: Dict[str, Any] = {
             "question": question_json,
