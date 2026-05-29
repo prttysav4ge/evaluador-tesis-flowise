@@ -291,8 +291,8 @@ def api_list_chunks(limit=50, offset=0):
         return None
 
 
-def api_query(question, top_k=5, session_id=None):
-    payload = {"question": question, "top_k": top_k}
+def api_query(question, top_k=5, session_id=None, iterations=1):
+    payload = {"question": question, "top_k": top_k, "iterations": iterations}
     if session_id:
         payload["session_id"] = session_id
     try:
@@ -1626,7 +1626,11 @@ def _render_query_result_block(
     # ── Header: "Mentoría Completada" + 3 métricas ─────────────────────
     st.success("✅ **Mentoría Completada**")
 
-    iterations = st.session_state.get("iterations", 1)
+    # iterations_count viene del backend (cuantas pasadas se ejecutaron de
+    # verdad), no del slider — el slider puede haber cambiado entre tanto.
+    iterations = result.get("iterations_count") or len(
+        raw_result.get("iterations_history", [])
+    ) or 1
     score      = _extract_score(final_data)
     vigesimal  = round(score * 2, 1)
 
@@ -1855,12 +1859,20 @@ def page_query():
 
     # ── Ejecutar consulta + persistir resultado + avanzar al stage RESULTS
     if send and len(question.strip()) >= 5:
-        with st.spinner(
-            "Los agentes están analizando el proyecto de investigación… "
+        iters = st.session_state.get("iterations", 1)
+        spinner_msg = (
+            f"El panel multiagente está analizando el proyecto… "
+            f"{iters} iteración(es) × 6 agentes — "
             "puede tardar entre 1 y 5 minutos (más si Groq aplica rate-limiting)."
-        ):
+        )
+        with st.spinner(spinner_msg):
             t0 = time.time()
-            result, status = api_query(question.strip(), top_k=top_k, session_id=session_id)
+            result, status = api_query(
+                question.strip(),
+                top_k=top_k,
+                session_id=session_id,
+                iterations=iters,
+            )
             elapsed = round(time.time() - t0, 1)
 
         if status == 200:
