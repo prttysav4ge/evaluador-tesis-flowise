@@ -87,12 +87,50 @@ def compute_gain_score(
 
 def compute_kappa(ratings_a: list, ratings_b: list) -> Optional[float]:
     """
-    Cohen's Kappa entre 2 evaluadores. Placeholder por ahora — requiere que
-    el pipeline genere dos evaluaciones independientes (ej. dos pasadas del
-    panel con seeds distintos). Se habilitará cuando el loop nativo de Flowise
-    (Sprint 4) permita comparar iteración N vs iteración N+1.
+    Cohen's Kappa entre 2 evaluadores (categorías discretas). Si recibe
+    listas vacías o asimétricas devuelve None.
+
+    Las "categorías" típicas para puntajes de tesis son:
+       0-3 = insuficiente
+       4-6 = aceptable
+       7-8 = bueno
+       9-10 = excelente
+    El caller debe binarizar antes si pasa puntajes continuos.
     """
-    return None
+    if not ratings_a or not ratings_b or len(ratings_a) != len(ratings_b):
+        return None
+    n = len(ratings_a)
+    if n == 0:
+        return None
+    # Acuerdo observado
+    p_o = sum(1 for a, b in zip(ratings_a, ratings_b) if a == b) / n
+    # Acuerdo esperado por azar (asume distribución igual entre categorías)
+    cats = set(ratings_a) | set(ratings_b)
+    p_e = sum(
+        (ratings_a.count(c) / n) * (ratings_b.count(c) / n)
+        for c in cats
+    )
+    if p_e == 1.0:
+        return 1.0  # perfecto y trivial
+    return round((p_o - p_e) / (1 - p_e), 4)
+
+
+def compute_iteration_consistency(scores: list[float]) -> Optional[float]:
+    """
+    Consistencia simple entre iteraciones: proporción de puntajes que
+    quedan dentro de ±1.0 del promedio. Rango [0, 1]. 1.0 = todos los
+    puntajes coinciden ±1; valores bajos indican alta varianza entre
+    iteraciones (el panel cambió mucho de opinión).
+
+    Se usa como proxy de "Kappa" en la UI cuando hay >=2 iteraciones,
+    porque Cohen kappa estricto requiere binarizar y con pocos puntos
+    (1-3) da resultados volátiles.
+    """
+    if not scores or len(scores) < 2:
+        return None
+    avg = sum(scores) / len(scores)
+    within = sum(1 for s in scores if abs(s - avg) <= 1.0) / len(scores)
+    return round(within, 4)
 
 
 # ---------------------------------------------------------------------- #

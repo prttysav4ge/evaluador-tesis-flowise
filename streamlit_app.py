@@ -1253,15 +1253,11 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
         st.caption("Sin recomendaciones explícitas en esta evaluación.")
 
 
-def _render_tab_debate(agents: dict, final_data: dict) -> None:
-    """
-    Pestaña 2 — Debate del panel multiagente.
+def _render_single_debate_session(agents: dict, final_data: dict) -> None:
+    """Renderiza UNA sesión de debate (las 4 perspectivas + consenso + disenso).
 
-    Si la Síntesis produjo los bloques nuevos (final_data['debate'],
-    'consenso', 'disenso'), los usamos como fuente primaria. Si no
-    (modelo viejo, parsing parcial), caemos al mapeo derivado de los
-    agentes individuales como en versiones previas.
-    """
+    Usado tanto en el caso de iteración única como dentro de cada expander
+    cuando hay multiples iteraciones (historial de sesiones)."""
     debate    = final_data.get("debate") if isinstance(final_data, dict) else None
     consenso  = final_data.get("consenso") if isinstance(final_data, dict) else None
     disenso   = final_data.get("disenso")  if isinstance(final_data, dict) else None
@@ -1348,6 +1344,53 @@ def _render_tab_debate(agents: dict, final_data: dict) -> None:
             "_Sin bloque de disenso en la respuesta. "
             "Disponible cuando la Síntesis produce el JSON extendido._"
         )
+
+
+def _agents_from_iteration_entry(entry: dict) -> tuple[dict, dict]:
+    """
+    Dado un dict del iterations_history (con 'memory' y/o 'flowise_response'),
+    construye el (agents, final_data) que usan los renderers de debate. Esto
+    permite que cada sesión del historial pase por la misma lógica de
+    extracción que el resultado principal.
+    """
+    fake_raw = {
+        "memory":           entry.get("memory"),
+        "flowise_response": entry.get("flowise_response"),
+    }
+    fake_raw = {k: v for k, v in fake_raw.items() if v}
+    agents     = _extract_agent_outputs(fake_raw)
+    final_data = agents.get("mentor_final", {}) or {}
+    return agents, final_data
+
+
+def _render_tab_debate(agents: dict, final_data: dict, raw_result: dict) -> None:
+    """
+    Pestaña 2 — Debate del panel multiagente.
+
+    - 1 iteración  → 1 sola sesión, render directo.
+    - N iteraciones → expander 'Sesión K' por cada una, con la última expandida
+      por default; permite ver la evolución del debate entre rondas.
+    """
+    history = raw_result.get("iterations_history") or []
+
+    if len(history) <= 1:
+        _render_single_debate_session(agents, final_data)
+        return
+
+    n = len(history)
+    st.caption(
+        f"_Panel ejecutado en **{n} iteraciones**. "
+        "Cada sesión recibe la síntesis previa y la refina._"
+    )
+
+    for i, entry in enumerate(history, 1):
+        is_latest = (i == n)
+        iter_agents, iter_final = _agents_from_iteration_entry(entry)
+        iter_score = _extract_score(iter_final)
+        score_chip = f"  ·  puntaje {iter_score:.1f}" if iter_score else ""
+        label = f"📋 Sesión {i}{' (más reciente)' if is_latest else ''}{score_chip}"
+        with st.expander(label, expanded=is_latest):
+            _render_single_debate_session(iter_agents, iter_final)
 
 
 def _render_tab_rag(result: dict) -> None:
@@ -1450,6 +1493,19 @@ def _render_tab_reportes(
     original_context = result.get("result", {}).get("original_context", "") \
         or result.get("context_preview", "")
 
+    # ── Extraer puntajes reales por iteración para Gain / Kappa ─────────
+    raw_result = result.get("result", {}) or {}
+    history    = raw_result.get("iterations_history") or []
+    iter_scores: list[float] = []
+    for entry in history:
+        _, iter_final = _agents_from_iteration_entry(entry)
+        iter_scores.append(_extract_score(iter_final))
+    iter_scores = [s for s in iter_scores if s]  # descarta ceros
+
+    final_score    = _extract_score(final_data)
+    first_score    = iter_scores[0] if iter_scores else None
+    multi_iter     = len(iter_scores) >= 2
+
     metrics = st.session_state.get("last_metrics")
 
     if not texto_sugerido or not original_context:
@@ -1457,16 +1513,21 @@ def _render_tab_reportes(
     elif metrics is None:
         if st.button("🧮 Calcular métricas NLP", type="primary"):
             with st.spinner("Calculando ROUGE / BLEU / similitud coseno…"):
-                from services.metrics_service import compute_all
-                score = _extract_score(final_data)
-                # Sin "score_before" real, usamos 5.0 como baseline neutral.
-                # Cuando Sprint 4 entregue iteración previa, lo cambiamos.
+                from services.metrics_service import (
+                    compute_all, compute_iteration_consistency,
+                )
+                # Gain real: si hay múltiples iteraciones, score_before =
+                # puntaje de iter 1; si no, baseline neutral 5.0.
+                score_before = first_score if multi_iter else 5.0
                 metrics = compute_all(
                     reference=original_context,
                     hypothesis=texto_sugerido,
-                    score_before=5.0,
-                    score_after=score,
+                    score_before=score_before,
+                    score_after=final_score,
                 )
+                # Kappa proxy: consistencia entre iteraciones. None si N<2.
+                metrics["iteration_consistency"] = compute_iteration_consistency(iter_scores)
+                metrics["iter_scores"] = iter_scores
                 st.session_state["last_metrics"] = metrics
                 st.rerun()
     else:
@@ -1478,10 +1539,21 @@ def _render_tab_reportes(
         m5, m6, m7, m8 = st.columns(4)
         m5.metric("Cos sim",      _fmt(metrics.get("cosine_similarity")))
         m6.metric("Gain Score",   _fmt(metrics.get("gain_score")))
-        m7.metric("Kappa",        _fmt(metrics.get("kappa")))
-        m8.metric("Puntaje 0-10", f"{_extract_score(final_data):.1f}")
-        if metrics.get("kappa") is None:
-            st.caption("_Kappa: requiere 2 evaluaciones — habilitable cuando Sprint 4 active iteraciones múltiples._")
+        # Cuando hay múltiples iteraciones, reemplazamos Kappa por la
+        # consistencia entre iteraciones (más interpretable que Cohen).
+        consistency = metrics.get("iteration_consistency")
+        if consistency is not None:
+            m7.metric("Consistencia iter.", _fmt(consistency),
+                      help="Proporción de iteraciones con puntaje dentro de ±1.0 del promedio.")
+        else:
+            m7.metric("Kappa",        _fmt(metrics.get("kappa")))
+        m8.metric("Puntaje 0-10", f"{final_score:.1f}")
+
+        if multi_iter:
+            scores_str = " → ".join(f"{s:.1f}" for s in iter_scores)
+            st.caption(f"_Puntajes por iteración: {scores_str}._")
+        if metrics.get("kappa") is None and consistency is None:
+            st.caption("_Kappa: requiere ≥2 iteraciones. Ajustá el slider del Paso 3 para activar._")
 
     st.markdown("---")
 
@@ -1653,7 +1725,7 @@ def _render_query_result_block(
     with tab1:
         _render_tab_evaluation(agent_outputs, final_data, raw_result)
     with tab2:
-        _render_tab_debate(agent_outputs, final_data)
+        _render_tab_debate(agent_outputs, final_data, raw_result)
     with tab3:
         _render_tab_rag(result)
     with tab4:
