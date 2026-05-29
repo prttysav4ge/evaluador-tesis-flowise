@@ -1299,13 +1299,26 @@ def _render_tab_debate(agents: dict, final_data: dict) -> None:
 
 
 def _render_tab_rag(result: dict) -> None:
-    """Pestaña 3 — Contexto RAG con sub-pestañas (libros y cruzado en Sprint 4)."""
+    """
+    Pestaña 3 — Contexto RAG con sub-pestañas:
+      - Del PDF de tesis        — context_preview (formato original).
+      - De libros de referencia — reference_chunks recuperados de refs_store.
+      - Contexto cruzado        — vista lado a lado tesis vs biblioteca.
+    """
+    raw_result = result.get("result", {}) or {}
+
+    # ── Datos de la biblioteca disponibles ──────────────────────────────
+    refs_chunks  = raw_result.get("reference_chunks", []) or []
+    refs_context = raw_result.get("reference_context", "") or ""
+    refs_count   = result.get("reference_chunks_retrieved", 0) or len(refs_chunks)
+
     sub_tesis, sub_libros, sub_cruzado = st.tabs([
         "📄 Del PDF de tesis",
-        "📚 De libros de referencia",
+        f"📚 De libros de referencia ({refs_count})",
         "🔗 Contexto cruzado",
     ])
 
+    # ── Sub-tab 1: tesis ────────────────────────────────────────────────
     with sub_tesis:
         context = result.get("context_preview", "")
         if context:
@@ -1315,17 +1328,54 @@ def _render_tab_rag(result: dict) -> None:
         else:
             st.info("No hay contexto recuperado disponible en este resultado.")
 
+    # ── Sub-tab 2: libros ───────────────────────────────────────────────
     with sub_libros:
-        st.caption(
-            "_Disponible en Sprint 4: indexamos los libros metodológicos "
-            "(Hernández Sampieri y otros) y mostramos los fragmentos relevantes._"
-        )
+        if not refs_chunks:
+            st.info(
+                "Sin fragmentos de biblioteca para esta consulta. "
+                "Verifica que la colección esté indexada con "
+                "`python scripts/index_reference_books.py`."
+            )
+        else:
+            st.caption(
+                f"**{refs_count} fragmento(s)** recuperados de la Biblioteca Metodológica, "
+                "ordenados por similitud semántica con la pregunta."
+            )
+            for i, ch in enumerate(refs_chunks, 1):
+                src   = ch.get("source", "?")
+                page  = ch.get("page", "?")
+                score = ch.get("score")
+                text  = ch.get("text", "")
+                score_str = f"score: {score:.3f}" if isinstance(score, (int, float)) else ""
+                with st.expander(
+                    f"#{i} · **{src[:60]}** — p.{page}  ·  {score_str}",
+                    expanded=(i == 1),
+                ):
+                    st.markdown(text)
 
+    # ── Sub-tab 3: cruzado ──────────────────────────────────────────────
     with sub_cruzado:
         st.caption(
-            "_Disponible en Sprint 4: pasajes del PDF que se contrastan con "
-            "principios de los libros de referencia._"
+            "_Pasajes recuperados de la tesis a la izquierda contrastados con "
+            "los pasajes relevantes de la biblioteca metodológica a la derecha. "
+            "Estos son los inputs reales que vieron los agentes Investigador y "
+            "Metodológico para producir el análisis._"
         )
+        col_tesis, col_refs = st.columns(2, gap="medium")
+        with col_tesis:
+            st.markdown("**📄 Contexto de la tesis**")
+            st.text_area(
+                "cross_tesis",
+                value=result.get("context_preview", "(sin datos)"),
+                height=340, disabled=True, label_visibility="collapsed",
+            )
+        with col_refs:
+            st.markdown("**📚 Contexto de la Biblioteca**")
+            st.text_area(
+                "cross_refs",
+                value=refs_context or "(sin datos — la biblioteca pudo no haber recuperado fragmentos)",
+                height=340, disabled=True, label_visibility="collapsed",
+            )
 
 
 def _render_tab_reportes(
