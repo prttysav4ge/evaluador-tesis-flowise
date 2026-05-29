@@ -250,7 +250,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el INVESTIGADOR de un sistema de evaluación de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Mentor Intake como referencia.\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el INVESTIGADOR de un sistema de evaluación de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Mentor Intake como referencia. Si recibes contexto de la BIBLIOTECA METODOLÓGICA (libros como Hernández Sampieri), úsalo para respaldar tus observaciones citando los principios relevantes.\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -269,7 +269,7 @@
             "streaming": false,
             "llmModel": "groqChat"
           },
-          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nEVALUACIÓN MENTOR INTAKE:\n{{$flow.state.intake_result}}\n\nAnaliza profundamente y devuelve SOLO JSON:\n{\n  \"section_summary\": \"resumen técnico de lo analizado\",\n  \"key_claims\": [\"afirmación clave 1\"],\n  \"key_entities\": {\n    \"variables\": [],\n    \"methods\": [],\n    \"authors_cited\": [],\n    \"technologies\": []\n  },\n  \"gaps_detected\": [\"gap o vacío detectado\"],\n  \"fortalezas\": [\"fortaleza investigativa\"],\n  \"debilidades\": [\"debilidad investigativa\"],\n  \"complexity_level\": \"alto|medio|bajo\",\n  \"improvement_suggestions\": [\"sugerencia 1\", \"sugerencia 2\"],\n  \"puntuacion\": 7.5,\n  \"flags\": []\n}"
+          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nBIBLIOTECA METODOLÓGICA (fragmentos de libros de referencia — opcional):\n{{$flow.state.reference_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nEVALUACIÓN MENTOR INTAKE:\n{{$flow.state.intake_result}}\n\nAnaliza profundamente y devuelve SOLO JSON. Si la BIBLIOTECA aporta principios relevantes, cítalos en \"biblioteca_aplicada\":\n{\n  \"section_summary\": \"resumen técnico de lo analizado\",\n  \"key_claims\": [\"afirmación clave 1\"],\n  \"key_entities\": {\n    \"variables\": [],\n    \"methods\": [],\n    \"authors_cited\": [],\n    \"technologies\": []\n  },\n  \"gaps_detected\": [\"gap o vacío detectado\"],\n  \"fortalezas\": [\"fortaleza investigativa\"],\n  \"debilidades\": [\"debilidad investigativa\"],\n  \"complexity_level\": \"alto|medio|bajo\",\n  \"improvement_suggestions\": [\"sugerencia 1\", \"sugerencia 2\"],\n  \"puntuacion\": 7.5,\n  \"flags\": [],\n  \"biblioteca_aplicada\": [\"principio o cita del libro X usado\"]\n}"
         },
         "outputAnchors": [
           { "id": "llmAgentflow_1-output-llmAgentflow", "label": "LLM", "name": "llmAgentflow" }
@@ -372,7 +372,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el AGENTE METODOLÓGICO de un sistema de evaluación de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia.\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el AGENTE METODOLÓGICO de un sistema de evaluación de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia. CRÍTICO: si recibes contexto de la BIBLIOTECA METODOLÓGICA, ésta es tu fuente de verdad metodológica — contrasta lo que hace la tesis con lo que recomienda la literatura (Hernández Sampieri, Tamayo, etc.).\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -391,7 +391,7 @@
             "streaming": false,
             "llmModel": "groqChat"
           },
-          "llmUserMessage": "CONTEXTO RECUPERADO:\n{{$flow.state.retrieved_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nAUDITORÍA PREVIA:\n{{$flow.state.audit_result}}\n\nEvalúa el marco metodológico y devuelve SOLO JSON:\n{\n  \"enfoque\": \"cualitativo|cuantitativo|mixto|no_especificado\",\n  \"tipo_investigacion\": \"descriptiva|explicativa|correlacional|experimental|exploratoria\",\n  \"diseno\": \"descripción del diseño identificado\",\n  \"adecuacion_metodologica\": \"alta|media|baja\",\n  \"instrumentos_identificados\": [\"instrumento\"],\n  \"limitaciones_metodologicas\": [\"limitacion\"],\n  \"sugerencias_metodologicas\": [\"sugerencia\"],\n  \"puntuacion_metodologia\": 7.0,\n  \"comentario\": \"análisis metodológico en 2-3 oraciones\"\n}"
+          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nBIBLIOTECA METODOLÓGICA (fragmentos de libros — fuente de verdad metodológica):\n{{$flow.state.reference_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nAUDITORÍA PREVIA:\n{{$flow.state.audit_result}}\n\nEvalúa el marco metodológico contrastando lo que hace la tesis con lo que recomienda la BIBLIOTECA. Si difieren, indícalo. Devuelve SOLO JSON:\n{\n  \"enfoque\": \"cualitativo|cuantitativo|mixto|no_especificado\",\n  \"tipo_investigacion\": \"descriptiva|explicativa|correlacional|experimental|exploratoria\",\n  \"diseno\": \"descripción del diseño identificado\",\n  \"adecuacion_metodologica\": \"alta|media|baja\",\n  \"instrumentos_identificados\": [\"instrumento\"],\n  \"limitaciones_metodologicas\": [\"limitacion\"],\n  \"sugerencias_metodologicas\": [\"sugerencia\"],\n  \"puntuacion_metodologia\": 7.0,\n  \"comentario\": \"análisis metodológico en 2-3 oraciones\",\n  \"alineacion_con_biblioteca\": \"alta|media|baja|no_aplica\",\n  \"citas_biblioteca\": [\"principio del libro X usado\"]\n}"
         },
         "outputAnchors": [
           { "id": "llmAgentflow_3-output-llmAgentflow", "label": "LLM", "name": "llmAgentflow" }
