@@ -50,6 +50,15 @@ class QueryRequest(BaseModel):
         default=None,
         description="ID de sesión para mantener conversación en Flowise (opcional).",
     )
+    iterations: int = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description=(
+            "Cantidad de iteraciones del panel multiagente. En cada iteración, "
+            "el agente de Síntesis recibe la síntesis previa y la refina."
+        ),
+    )
 
 
 class QueryResponse(BaseModel):
@@ -60,6 +69,7 @@ class QueryResponse(BaseModel):
     context_preview: str
     reference_chunks_retrieved: int = 0
     reference_context_preview: str  = ""
+    iterations_count: int           = 1
     result: Dict[str, Any]
 
 
@@ -146,15 +156,58 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     )
 
     # ------------------------------------------------------------------ #
-    #  3. Agentes                                                          #
+    #  3. Agentes — loop de iteraciones                                   #
     # ------------------------------------------------------------------ #
-    if settings.USE_FLOWISE:
-        result, mode = await _call_flowise_with_fallback(
-            body.question, retrieved_context, reference_context, body.session_id
-        )
-    else:
-        mode = "python_agents"
-        result = await _call_python_agents(body.question, retrieved_context, reference_context)
+    # En cada iteración corremos el panel completo (6 agentes). A partir
+    # de la iteración 2, la síntesis previa se pasa como contexto extra
+    # al agente Síntesis para que refine en vez de empezar de cero.
+    iterations_history: list[Dict[str, Any]] = []
+    previous_iteration_text: Optional[str]   = None
+    final_result: Dict[str, Any]             = {}
+    mode: str                                = "python_agents"
+
+    for iter_num in range(1, body.iterations + 1):
+        logger.info(f"🔁 Iteración {iter_num}/{body.iterations}")
+
+        if settings.USE_FLOWISE:
+            iter_result, iter_mode = await _call_flowise_with_fallback(
+                body.question, retrieved_context, reference_context,
+                body.session_id, previous_iteration=previous_iteration_text,
+            )
+        else:
+            iter_mode = "python_agents"
+            iter_result = await _call_python_agents(
+                body.question, retrieved_context, reference_context,
+                previous_iteration=previous_iteration_text,
+            )
+
+        # Extraemos el output de la síntesis de esta iteración para alimentar
+        # la siguiente. JSON string compacto para minimizar tokens.
+        iter_synthesis = _extract_synthesis_json(iter_result)
+        previous_iteration_text = iter_synthesis if iter_synthesis else None
+
+        iterations_history.append({
+            "iteration": iter_num,
+            "mode": iter_mode,
+            "result": iter_result,
+        })
+        final_result = iter_result
+        mode = iter_mode
+
+    # El frontend espera el último iter como top-level (backward compat con
+    # las 4 pestañas) y la historia completa en 'iterations_history' para
+    # poder renderizar P2 con sesiones múltiples.
+    result = final_result
+    result["iterations_history"] = [
+        {
+            "iteration": h["iteration"],
+            "mode": h["mode"],
+            "memory": h["result"].get("memory"),
+            "flowise_response": h["result"].get("flowise_response"),
+            "_flowise_fallback": h["result"].get("_flowise_fallback"),
+        }
+        for h in iterations_history
+    ]
 
     # Adjuntamos contexto cruzado al resultado para que el frontend lo
     # use en la sub-pestaña 'De libros de referencia' / 'Contexto cruzado'.
@@ -212,6 +265,7 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
         context_preview=context_preview,
         reference_chunks_retrieved=len(refs_raw),
         reference_context_preview=reference_context_preview,
+        iterations_count=body.iterations,
         result=result,
     )
 
@@ -244,6 +298,35 @@ def _format_refs_context(refs_results: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _extract_synthesis_json(result: Dict[str, Any]) -> str:
+    """
+    Extrae el JSON de la síntesis final (Mentor Final / Síntesis y Consenso)
+    como string compacto para pasarlo a la siguiente iteración.
+
+    Funciona en ambos modos:
+      - Flowise: result['flowise_response']['text'] suele ser el JSON.
+      - Python:  result['memory']['mentor_final'] es el dict.
+    """
+    # Modo Python
+    if "memory" in result:
+        synth = result["memory"].get("mentor_final")
+        if synth:
+            try:
+                return json.dumps(synth, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                return ""
+
+    # Modo Flowise
+    if "flowise_response" in result:
+        flow_resp = result["flowise_response"]
+        if isinstance(flow_resp, dict):
+            text = flow_resp.get("text") or flow_resp.get("output") or ""
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+
+    return ""
+
+
 _FLOWISE_FILE_ERROR = "filePath"   # señal de nodo con archivo local roto en cloud
 
 # Errores transitorios de infraestructura (Flowise Cloud / Cloudflare) que
@@ -269,6 +352,7 @@ async def _call_flowise_with_fallback(
     context: str,
     reference_context: str,
     session_id: Optional[str],
+    previous_iteration: Optional[str] = None,
 ) -> tuple[Dict[str, Any], str]:
     """
     Intenta llamar a Flowise. Si devuelve un error recuperable (nodo con
@@ -279,6 +363,9 @@ async def _call_flowise_with_fallback(
         reference_context: contexto de la Biblioteca Metodológica (libros).
             Se inyecta en el JSON payload que parsea el CustomFunction de
             Flowise para que los agentes lo lean desde el Flow State.
+        previous_iteration: JSON string de la síntesis de la iteración anterior.
+            Vacío en la primera iteración. La Síntesis lo usa para refinar
+            en lugar de empezar de cero.
     """
     from flowise.client import flowise_client
 
@@ -288,6 +375,7 @@ async def _call_flowise_with_fallback(
             context=context,
             reference_context=reference_context,
             session_id=session_id,
+            previous_iteration=previous_iteration,
         )
         return {"flowise_response": response}, "flowise"
 
@@ -302,7 +390,7 @@ async def _call_flowise_with_fallback(
                 "que no existe en Flowise Cloud. "
                 "Haciendo fallback a agentes Python automáticamente."
             )
-            result = await _call_python_agents(question, context, reference_context)
+            result = await _call_python_agents(question, context, reference_context, previous_iteration=previous_iteration)
             result["_flowise_fallback"] = (
                 "Flowise Cloud falló (nodo con archivo local roto). "
                 "Se usaron los agentes Python como fallback."
@@ -315,7 +403,7 @@ async def _call_flowise_with_fallback(
                 "⚠️  Flowise Cloud devolvió error transitorio (timeout/gateway). "
                 "Haciendo fallback a agentes Python automáticamente."
             )
-            result = await _call_python_agents(question, context, reference_context)
+            result = await _call_python_agents(question, context, reference_context, previous_iteration=previous_iteration)
             result["_flowise_fallback"] = (
                 "Flowise Cloud no respondió a tiempo (504/502/503). "
                 "Se usaron los agentes Python como fallback."
@@ -365,11 +453,14 @@ async def _call_python_agents(
     question: str,
     context: str,
     reference_context: str = "",
+    previous_iteration: Optional[str] = None,
 ) -> Dict[str, Any]:
     from services.agent_service import run_sequential_pipeline
 
     try:
-        return await run_sequential_pipeline(question, context, reference_context)
+        return await run_sequential_pipeline(
+            question, context, reference_context, previous_iteration=previous_iteration
+        )
     except Exception as exc:
         logger.exception("Error en pipeline de agentes Python")
         raise HTTPException(

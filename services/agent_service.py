@@ -283,6 +283,7 @@ async def run_sequential_pipeline(
     question: str,
     retrieved_context: str,
     reference_context: str = "",
+    previous_iteration: str | None = None,
 ) -> Dict[str, Any]:
     """
     Ejecuta los 6 agentes secuencialmente con memoria acumulativa.
@@ -290,8 +291,9 @@ async def run_sequential_pipeline(
     Args:
         retrieved_context: fragmentos relevantes del PDF de tesis (RAG primario).
         reference_context: fragmentos de la Biblioteca Metodológica (RAG cruzado).
-            Vacío si la biblioteca no está poblada. Commit 3 del enchufe actualiza
-            los prompts de Investigador y Metodológico para que lo usen.
+        previous_iteration: síntesis de la iteración anterior (JSON string).
+            Vacía en la primera iteración del panel. Cuando esté presente, el
+            agente Síntesis la usa para refinar en lugar de empezar de cero.
 
     La memoria se va enriqueciendo con la salida de cada agente.
     Cada agente recibe solo el resumen de los agentes anteriores
@@ -349,9 +351,11 @@ async def run_sequential_pipeline(
     memory["redactor"] = await _run_agent("redactor", prompt_5, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 6 — Mentor Final (síntesis)                                 #
+    #  Agente 6 — Síntesis y Consenso (con iteración previa si aplica)    #
     # ------------------------------------------------------------------ #
-    prompt_6 = build_mentor_final_prompt(question, memory)
+    prompt_6 = build_mentor_final_prompt(
+        question, memory, previous_iteration=previous_iteration
+    )
     memory["mentor_final"] = await _run_agent("mentor_final", prompt_6, llm)
 
     return {

@@ -256,10 +256,31 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
 #  AGENTE 6 — Síntesis y Consenso (cierre del panel multiagente)         #
 # ====================================================================== #
 
-def build_mentor_final_prompt(question: str, memory: Dict[str, Any]) -> str:
+def build_mentor_final_prompt(
+    question: str,
+    memory: Dict[str, Any],
+    previous_iteration: str | None = None,
+) -> str:
     # Serialización compacta (sin indent) para reducir el tamaño del prompt
     # y evitar que el agente 6 reciba >2000 tokens de contexto de agentes previos.
     full_memory = json.dumps(memory, ensure_ascii=False, separators=(",", ":"))
+
+    # Bloque opcional con la síntesis de la iteración anterior. Si está
+    # presente, el agente debe refinarla, no repetirla. Si está vacío, el
+    # prompt funciona idéntico al original (primera iteración).
+    iter_block = (
+        f"\n=== SÍNTESIS DE LA ITERACIÓN ANTERIOR ===\n{previous_iteration}\n"
+        if previous_iteration else ""
+    )
+    iter_extra_instr = (
+        "10. CRÍTICO: recibiste la SÍNTESIS DE LA ITERACIÓN ANTERIOR. Tu tarea NO es "
+        "repetirla — es refinarla. Conserva lo que sigue siendo válido, agudiza lo que "
+        "quedó genérico, ajusta puntuación si el panel reveló matices nuevos, y revisita "
+        "el debate/consenso/disenso para incorporar precisiones. Cada iteración del panel "
+        "debe agregar valor.\n"
+        if previous_iteration else ""
+    )
+
     return f"""Eres SÍNTESIS Y CONSENSO, el agente final del panel multiagente de evaluación de tesis.
 
 ROL: Integrar las evaluaciones del Supervisor, Investigador, Auditor, Metodólogo y Redactor en (a) un feedback pedagógico final y (b) la transcripción del DEBATE entre las 3 perspectivas centrales del panel.
@@ -274,7 +295,7 @@ Las 3 perspectivas del debate son:
 
 === EVALUACIONES COMPLETAS DEL PANEL ===
 {full_memory}
-
+{iter_block}
 === INSTRUCCIONES ===
 1. Sintetiza los hallazgos más importantes de TODOS los agentes previos.
 2. Identifica los 3 puntos fuertes principales de la tesis.
@@ -285,6 +306,7 @@ Las 3 perspectivas del debate son:
 7. Indica el SIGUIENTE PASO concreto más importante.
 8. Reconstruye el DEBATE: resume en 2-3 oraciones lo que dijo cada una de las 3 perspectivas (formal/metodológica/contextual) y produce una síntesis breve.
 9. Lista 2-4 puntos de CONSENSO (donde las 3 perspectivas coinciden) y 2-4 puntos de DISENSO (donde 2 perspectivas chocan o se contradicen). Sé honesto: si no hay disenso real, devolvé [].
+{iter_extra_instr}
 
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{

@@ -98,6 +98,7 @@ class FlowiseClient:
         question: str,
         context: str,
         reference_context: str = "",
+        previous_iteration: Optional[str] = None,
     ) -> str:
         """
         Construye el JSON string que el CustomFunction `initializeFlowState`
@@ -118,12 +119,19 @@ class FlowiseClient:
         from app.config import settings
         refs_cap = max(int(settings.FLOWISE_MAX_CONTEXT_CHARS * 0.6), 600)
 
+        # Cap chico para previous_iteration: solo es el JSON de la síntesis
+        # previa, ~1000 chars suelen alcanzar para que el agente refine.
+        prev_iter_cap = 1500
+
         payload_data = {
             "section_type":      "rag_query",
             "section_text":      question,
             "retrieved_context": self._truncate_context(context),
             "reference_context": (
                 reference_context[:refs_cap] if reference_context else ""
+            ),
+            "previous_iteration": (
+                previous_iteration[:prev_iter_cap] if previous_iteration else ""
             ),
             "research_line":     "",
             "match_type":        "semantic_similarity",
@@ -137,6 +145,7 @@ class FlowiseClient:
         reference_context: str = "",
         session_id: Optional[str] = None,
         override_config: Optional[Dict[str, Any]] = None,
+        previous_iteration: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Llama al Agentflow de Flowise con la pregunta y el contexto RAG.
@@ -158,7 +167,9 @@ class FlowiseClient:
             )
 
         # El Agentflow espera el question como JSON serializado como string
-        question_json = self._build_question_payload(question, context, reference_context)
+        question_json = self._build_question_payload(
+            question, context, reference_context, previous_iteration
+        )
 
         payload: Dict[str, Any] = {
             "question": question_json,
