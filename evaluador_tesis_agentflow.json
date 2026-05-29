@@ -49,6 +49,7 @@
           "startState": [
             { "key": "student_input",            "value": "\"\"" },
             { "key": "retrieved_context",         "value": "\"\"" },
+            { "key": "reference_context",         "value": "\"\"" },
             { "key": "current_section_type",      "value": "\"\"" },
             { "key": "validated_research_line",   "value": "\"\"" },
             { "key": "research_line_match_type",  "value": "\"\"" },
@@ -116,7 +117,7 @@
         "inputAnchors": [],
         "inputs": {
           "customFunctionInputVariables": [],
-          "customFunctionJavascriptFunction": "// ─────────────────────────────────────────────────────────────────\n// initializeFlowState\n// Parsea el JSON enviado por el backend Python (flowise/client.py)\n// El payload tiene las keys:\n//   section_type, section_text, retrieved_context, research_line, match_type\n// ─────────────────────────────────────────────────────────────────\nlet data = {};\ntry {\n  const raw = $flow.input || \"\";\n  data = typeof raw === \"string\" ? JSON.parse(raw) : raw;\n} catch (e) {\n  // Si no viene como JSON, lo tratamos como pregunta en texto plano\n  data = {\n    section_type: \"rag_query\",\n    section_text: String($flow.input || \"consulta sin texto\"),\n    retrieved_context: \"\",\n    research_line: \"none\",\n    match_type: \"none\"\n  };\n}\n\nreturn {\n  current_section_type:     data.section_type       || \"rag_query\",\n  student_input:            data.section_text        || \"consulta sin texto\",\n  retrieved_context:        data.retrieved_context   || \"\",\n  validated_research_line:  data.research_line       || \"none\",\n  research_line_match_type: data.match_type          || \"semantic_similarity\",\n  debug_info: JSON.stringify({\n    parsed_ok:     true,\n    section:       data.section_type,\n    context_chars: (data.retrieved_context || \"\").length\n  })\n};",
+          "customFunctionJavascriptFunction": "// ─────────────────────────────────────────────────────────────────\n// initializeFlowState\n// Parsea el JSON enviado por el backend Python (flowise/client.py)\n// El payload tiene las keys:\n//   section_type, section_text, retrieved_context, reference_context,\n//   research_line, match_type\n// reference_context = fragmentos recuperados de la Biblioteca Metodologica\n// ─────────────────────────────────────────────────────────────────\nlet data = {};\ntry {\n  const raw = $flow.input || \"\";\n  data = typeof raw === \"string\" ? JSON.parse(raw) : raw;\n} catch (e) {\n  // Si no viene como JSON, lo tratamos como pregunta en texto plano\n  data = {\n    section_type: \"rag_query\",\n    section_text: String($flow.input || \"consulta sin texto\"),\n    retrieved_context: \"\",\n    reference_context: \"\",\n    research_line: \"none\",\n    match_type: \"none\"\n  };\n}\n\nreturn {\n  current_section_type:     data.section_type       || \"rag_query\",\n  student_input:            data.section_text        || \"consulta sin texto\",\n  retrieved_context:        data.retrieved_context   || \"\",\n  reference_context:        data.reference_context   || \"\",\n  validated_research_line:  data.research_line       || \"none\",\n  research_line_match_type: data.match_type          || \"semantic_similarity\",\n  debug_info: JSON.stringify({\n    parsed_ok:     true,\n    section:       data.section_type,\n    context_chars: (data.retrieved_context || \"\").length,\n    refs_chars:    (data.reference_context || \"\").length\n  })\n};",
           "customFunctionUpdateState": [
             {
               "key": "current_section_type",
@@ -129,6 +130,10 @@
             {
               "key": "retrieved_context",
               "value": "<p><span class=\"variable\" data-type=\"mention\" data-id=\"$returnValue.retrieved_context\" data-label=\"$returnValue.retrieved_context\" data-mention-suggestion-char=\"@\">{{ $returnValue.retrieved_context }}</span></p>"
+            },
+            {
+              "key": "reference_context",
+              "value": "<p><span class=\"variable\" data-type=\"mention\" data-id=\"$returnValue.reference_context\" data-label=\"$returnValue.reference_context\" data-mention-suggestion-char=\"@\">{{ $returnValue.reference_context }}</span></p>"
             },
             {
               "key": "validated_research_line",
