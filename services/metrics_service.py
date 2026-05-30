@@ -13,7 +13,9 @@ Métricas implementadas:
   - BLEU                                  — n-gram precision con brevity penalty.
   - Similitud coseno                      — sobre embeddings multilingual-e5.
   - Gain Score (Hake)                     — mejora normalizada de puntaje.
-  - Cohen's Kappa                         — placeholder (requiere 2 evaluadores).
+  - Cohen's Kappa                         — acuerdo entre 2 listas categóricas.
+  - Consistencia entre iteraciones        — proxy más legible que Kappa cuando
+                                            hay N≥2 iteraciones del panel.
 
 Estrategia de fallback: cada métrica es safe-fail. Si una librería no está
 instalada o el cómputo arroja excepción, devolvemos None en ese campo
@@ -156,7 +158,9 @@ def compute_all(
             "bleu":   float | None,
             "cosine_similarity": float | None,
             "gain_score":       float | None,   # solo si se pasan ambos scores
-            "kappa":            None,            # placeholder
+            "kappa":            None,            # compute_all no recibe raters; el
+                                                 # frontend usa compute_kappa directo
+                                                 # con puntajes binarizados si los tiene
         }
     """
     metrics: Dict[str, Any] = {}

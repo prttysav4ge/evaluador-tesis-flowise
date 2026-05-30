@@ -119,9 +119,11 @@ class FlowiseClient:
         from app.config import settings
         refs_cap = max(int(settings.FLOWISE_MAX_CONTEXT_CHARS * 0.6), 600)
 
-        # Cap chico para previous_iteration: solo es el JSON de la síntesis
-        # previa, ~1000 chars suelen alcanzar para que el agente refine.
-        prev_iter_cap = 1500
+        # Cap para previous_iteration: la síntesis incluye debate +
+        # consenso + disenso + recomendaciones priorizadas, que típicamente
+        # suman 2000-3000 chars en JSON. 2500 deja margen pero evita
+        # inflar el prompt total.
+        prev_iter_cap = 2500
 
         payload_data = {
             "section_type":      "rag_query",
@@ -154,8 +156,8 @@ class FlowiseClient:
         `initializeFlowState` pueda distribuirlo al Flow State del Agentflow.
 
         El flujo en Flowise queda así:
-          Start → CustomFunction (parsea JSON) → Mentor Intake → Investigador
-                → Auditor → Metodológico → Redactor → Mentor Final → End
+          Start → CustomFunction (parsea JSON) → Supervisor → Investigador
+                → Auditor → Metodólogo → Redactor → Síntesis y Consenso → End
 
         Returns:
             dict con la respuesta de Flowise (incluye key 'text' con la respuesta final).

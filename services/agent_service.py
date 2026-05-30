@@ -7,26 +7,27 @@ localmente usando LangChain + el LLM configurado.
 Ventaja: funciona sin tener Flowise corriendo (ideal para testing inicial).
 Desventaja: consume tokens del LLM por cada agente (6 llamadas por query).
 
-Pipeline:
+Pipeline (los keys de memory se mantienen por compatibilidad con el frontend
+y el state de Flowise; las etiquetas visibles ya son las nuevas):
   retrieved_context
        │
        ▼
-  [Mentor Intake]  → memory["mentor_intake"]
+  [Supervisor]            → memory["mentor_intake"]
        │
        ▼
-  [Investigador]   → memory["investigador"]
+  [Investigador]          → memory["investigador"]
        │
        ▼
-  [Auditor]        → memory["auditor"]
+  [Auditor]               → memory["auditor"]
        │
        ▼
-  [Metodológico]   → memory["metodologico"]
+  [Metodólogo]            → memory["metodologico"]
        │
        ▼
-  [Redactor]       → memory["redactor"]
+  [Redactor]              → memory["redactor"]
        │
        ▼
-  [Mentor Final]   → memory["mentor_final"]  ← respuesta final
+  [Síntesis y Consenso]   → memory["mentor_final"]  ← respuesta final
 """
 from __future__ import annotations
 

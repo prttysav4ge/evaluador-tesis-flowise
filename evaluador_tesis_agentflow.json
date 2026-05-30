@@ -255,7 +255,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el INVESTIGADOR de un sistema de evaluación de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Mentor Intake como referencia. Si recibes contexto de la BIBLIOTECA METODOLÓGICA (libros como Hernández Sampieri), úsalo para respaldar tus observaciones citando los principios relevantes.\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el INVESTIGADOR de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Supervisor como referencia. Si recibes contexto de la BIBLIOTECA METODOLÓGICA (libros como Hernández Sampieri), úsalo para respaldar tus observaciones citando los principios relevantes.\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,

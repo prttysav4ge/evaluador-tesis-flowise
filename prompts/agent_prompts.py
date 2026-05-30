@@ -6,7 +6,7 @@ Criterios de diseño:
     que pide texto académico plano listo para pegar en la tesis.
   - Bajo consumo de tokens: reciben sólo lo necesario de la memoria acumulada
   - Cada agente tiene un ROL único y claro
-  - El Mentor Final sintetiza todo para el estudiante
+  - El agente Síntesis y Consenso sintetiza todo para el estudiante
 """
 from __future__ import annotations
 import json
@@ -14,13 +14,13 @@ from typing import Any, Dict
 
 
 # ====================================================================== #
-#  AGENTE 1 — Mentor Intake (evaluación inicial)                         #
+#  AGENTE 1 — Supervisor (triage inicial del panel)                      #
 # ====================================================================== #
 
 def build_mentor_intake_prompt(question: str, context: str) -> str:
-    return f"""Eres el MENTOR DE EVALUACIÓN INICIAL de tesis universitarias.
+    return f"""Eres el SUPERVISOR del panel multiagente de evaluación de tesis universitarias.
 
-ROL: Realizar la evaluación inicial de la pregunta del evaluador sobre la tesis.
+ROL: Hacer el triage inicial del contexto recuperado y la pregunta del evaluador, y delimitar qué van a evaluar los demás agentes del panel (Investigador, Auditor, Metodólogo, Redactor, Síntesis).
 
 === CONTEXTO RECUPERADO DE LA TESIS ===
 {context}
@@ -79,7 +79,7 @@ ROL: Analizar la calidad investigativa del fragmento de tesis.
 === CONTEXTO DE LA TESIS ===
 {context}
 {refs_block}
-=== EVALUACIÓN PREVIA (Mentor Intake) ===
+=== EVALUACIÓN PREVIA (Supervisor) ===
 {mentor_summary}
 
 === INSTRUCCIONES ===
@@ -170,7 +170,7 @@ def build_metodologico_prompt(
         "evaluación citando la fuente. La Biblioteca es tu fuente de verdad metodológica.\n"
         if reference_context else ""
     )
-    return f"""Eres el AGENTE METODOLÓGICO especializado en marcos y diseños de investigación científica.
+    return f"""Eres el METODÓLOGO del panel multiagente, especializado en marcos y diseños de investigación científica.
 
 ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesis.
 
@@ -355,7 +355,7 @@ def build_texto_sugerido_prompt(
     sus debilidades y sugerencias guían qué debe cambiar en el contenido.
     La evaluación final aporta las recomendaciones priorizadas y áreas de mejora.
     """
-    # ── Datos del Mentor Final (o evaluación Flowise) ─────────────────────
+    # ── Datos de la Síntesis (o evaluación Flowise) ────────────────────────
     areas_mejora      = final_evaluation.get("areas_mejora", [])
     puntos_fuertes    = final_evaluation.get("puntos_fuertes", [])
     recomendaciones   = final_evaluation.get("recomendaciones_priorizadas", [])

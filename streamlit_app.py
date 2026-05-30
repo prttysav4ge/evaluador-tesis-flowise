@@ -1926,6 +1926,7 @@ def page_query():
             # _render_query_result_block leyendo desde session_state.
             st.session_state["last_question"] = question.strip()
             st.session_state["last_result"]   = {**result, "elapsed_seconds": elapsed}
+            st.session_state["last_metrics"]  = None   # forzar recálculo en la P4
             st.session_state["workflow_stage"] = STAGE_RESULTS
 
             # Guardar también en el historial (preexistente)
