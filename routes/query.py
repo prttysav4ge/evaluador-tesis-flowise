@@ -59,6 +59,22 @@ class QueryRequest(BaseModel):
             "el agente de Síntesis recibe la síntesis previa y la refina."
         ),
     )
+    page_start: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Página inicial de la sección seleccionada. Si se envía, el retrieval "
+            "se acota a ese rango de páginas en vez de búsqueda semántica global."
+        ),
+    )
+    page_end: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Página final (inclusive) de la sección. Si es None pero page_start "
+            "está definido, el rango llega hasta el final del documento."
+        ),
+    )
 
 
 class QueryResponse(BaseModel):
@@ -114,10 +130,28 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     # ------------------------------------------------------------------ #
     #  2. Retrieval desde ChromaDB                                        #
     # ------------------------------------------------------------------ #
-    logger.info(f"🔍 Buscando chunks relevantes para: '{body.question[:80]}…'")
+    # Filtro por rango de páginas: acota el retrieval a la sección elegida en
+    # el frontend (anti-cross-topic). Si no se envía, retrieval semántico global.
+    page_where = _build_page_where(body.page_start, body.page_end)
+    if page_where is not None:
+        logger.info(
+            f"🔍 Retrieval acotado a páginas [{body.page_start}–{body.page_end or 'fin'}] "
+            f"para: '{body.question[:60]}…'"
+        )
+    else:
+        logger.info(f"🔍 Buscando chunks relevantes para: '{body.question[:80]}…'")
 
     try:
-        raw_results = chroma_store.query(body.question, top_k=body.top_k)
+        raw_results = chroma_store.query(body.question, top_k=body.top_k, where=page_where)
+        # Degradación graciosa: si el filtro por sección no devuelve nada (p.ej.
+        # metadata de página inconsistente o sección sin chunks vectorizados),
+        # reintentamos con búsqueda global para no dejar al usuario sin evaluación.
+        if not raw_results and page_where is not None:
+            logger.warning(
+                "⚠️  El filtro por rango de páginas no devolvió fragmentos; "
+                "reintentando con búsqueda semántica global."
+            )
+            raw_results = chroma_store.query(body.question, top_k=body.top_k)
     except Exception as exc:
         logger.exception("Error en retrieval ChromaDB")
         raise HTTPException(status_code=500, detail=f"Error en ChromaDB: {str(exc)}")
@@ -277,6 +311,26 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
 # Cantidad de fragmentos de la Biblioteca Metodológica a recuperar por consulta.
 # Más bajo que el TOP_K de la tesis para no inflar el prompt de los agentes.
 _REFS_TOP_K = 3
+
+
+def _build_page_where(
+    page_start: Optional[int], page_end: Optional[int]
+) -> Optional[Dict[str, Any]]:
+    """
+    Construye el filtro `where` de ChromaDB para acotar el retrieval al rango
+    de páginas de la sección seleccionada en el frontend.
+
+    - Ambos definidos → rango cerrado [start, end]. ChromaDB exige `$and` para
+      combinar dos comparadores sobre el mismo campo (`page`).
+    - Solo start (última sección del documento) → desde start hasta el final.
+    - Ninguno (Vista general) → None: sin filtro, búsqueda semántica global.
+    """
+    if page_start is None:
+        return None
+    conds: list[Dict[str, Any]] = [{"page": {"$gte": page_start}}]
+    if page_end is not None:
+        conds.append({"page": {"$lte": page_end}})
+    return conds[0] if len(conds) == 1 else {"$and": conds}
 
 
 def _format_refs_context(refs_results: list) -> str:

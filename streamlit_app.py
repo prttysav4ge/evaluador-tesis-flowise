@@ -291,10 +291,16 @@ def api_list_chunks(limit=50, offset=0):
         return None
 
 
-def api_query(question, top_k=5, session_id=None, iterations=1):
+def api_query(question, top_k=5, session_id=None, iterations=1,
+              page_start=None, page_end=None):
     payload = {"question": question, "top_k": top_k, "iterations": iterations}
     if session_id:
         payload["session_id"] = session_id
+    # Rango de páginas: acota el retrieval a la sección elegida (None = global).
+    if page_start is not None:
+        payload["page_start"] = page_start
+    if page_end is not None:
+        payload["page_end"] = page_end
     try:
         # El TestClient ejecuta el handler en el mismo proceso (sin red), así que
         # no hay timeout de socket: bloquea hasta que el pipeline termine.
@@ -1731,10 +1737,63 @@ def _build_question_from_section(section_id: str, section_title: str = "") -> st
     )
 
 
-def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, bool]:
+def _page_range_for_section(
+    outline: list, section_id: str
+) -> tuple[int | None, int | None]:
+    """
+    Calcula el rango de páginas [start, end] que ocupa una sección del outline,
+    incluyendo sus subsecciones. Se envía al backend para filtrar el retrieval
+    de ChromaDB a las páginas reales de la sección elegida, en vez de la
+    búsqueda semántica global que recuperaba fragmentos de cualquier parte.
+
+    Regla:
+      - start = página del encabezado de la sección.
+      - end   = página del siguiente encabezado de nivel <= al de la sección,
+                menos 1 (ese encabezado ya pertenece a la sección siguiente).
+                Las subsecciones (nivel mayor) quedan incluidas en el rango.
+      - Última sección del documento → end = None (hasta el final).
+
+    Devuelve (None, None) si la sección no está en el outline.
+    """
+    if not outline or not section_id:
+        return None, None
+
+    # El outline llega ordenado por página desde el backend.
+    idx = next(
+        (i for i, h in enumerate(outline) if h.get("section_id") == section_id),
+        None,
+    )
+    if idx is None:
+        return None, None
+
+    sel        = outline[idx]
+    start_page = sel.get("page")
+    sel_level  = sel.get("level") or (str(section_id).count(".") + 1)
+
+    # Siguiente encabezado de nivel <= al seleccionado: marca el fin de la
+    # sección. Las subsecciones (nivel mayor) no cortan el rango.
+    end_page = None
+    for nxt in outline[idx + 1:]:
+        nxt_level = nxt.get("level") or (str(nxt.get("section_id", "")).count(".") + 1)
+        if nxt_level <= sel_level:
+            boundary = nxt.get("page")
+            if boundary is not None and start_page is not None:
+                # El encabezado siguiente ya pertenece a otra sección. Si
+                # comparte página con el inicio, acotamos a esa única página.
+                end_page = max(boundary - 1, start_page)
+            break
+
+    return start_page, end_page
+
+
+def _render_query_form_block(
+    total_chunks: int,
+) -> tuple[str, int, str | None, bool, int | None, int | None]:
     """
     Renderiza el Paso 2 — Configura y lanza la evaluación.
-    Devuelve (question, top_k, session_id, send_clicked).
+    Devuelve (question, top_k, session_id, send_clicked, page_start, page_end).
+    page_start/page_end acotan el retrieval a las páginas de la sección elegida
+    (None, None en Vista general → retrieval global).
 
     Layout (alineado con la app de referencia):
       - Banner verde 'PDF cargado: <nombre>'
@@ -1793,6 +1852,13 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
     )
     st.session_state["selected_section_id"] = selected_sid
 
+    # Rango de páginas de la sección: acota el retrieval a sus páginas reales.
+    # Vista general → (None, None): retrieval semántico global sin filtro.
+    if selected_sid == _OVERVIEW_SECTION_ID:
+        page_start, page_end = None, None
+    else:
+        page_start, page_end = _page_range_for_section(outline, selected_sid)
+
     # Texto contextual debajo del dropdown
     if selected_sid == _OVERVIEW_SECTION_ID:
         st.caption(
@@ -1800,9 +1866,16 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
             "y los agentes producirán una evaluación integral."
         )
     else:
+        if page_start and page_end:
+            rng = f" (págs. {page_start}–{page_end})"
+        elif page_start:
+            rng = f" (desde pág. {page_start})"
+        else:
+            rng = ""
         st.caption(
-            f"🔍 Análisis enfocado en la sección **{selected_sid} {selected_title}**. "
-            "Los agentes profundizarán en fortalezas, debilidades y mejoras concretas."
+            f"🔍 Análisis enfocado en la sección **{selected_sid} {selected_title}**{rng}. "
+            "El retrieval se limita a las páginas de la sección; los agentes "
+            "profundizarán en fortalezas, debilidades y mejoras concretas."
         )
 
     # ── Configuración avanzada ────────────────────────────────────────────
@@ -1855,7 +1928,7 @@ def _render_query_form_block(total_chunks: int) -> tuple[str, int, str | None, b
     # Construir la pregunta a enviar al backend
     question = _build_question_from_section(selected_sid, selected_title)
 
-    return question, top_k, session_id or None, send
+    return question, top_k, session_id or None, send, page_start, page_end
 
 
 def page_query():
@@ -1900,7 +1973,7 @@ def page_query():
         return
 
     # ── Formulario Paso 2 (dropdown sección + slider + botón) ──────────
-    question, top_k, session_id, send = _render_query_form_block(total)
+    question, top_k, session_id, send, page_start, page_end = _render_query_form_block(total)
 
     # ── Ejecutar consulta + persistir resultado + avanzar al stage RESULTS
     if send and len(question.strip()) >= 5:
@@ -1917,6 +1990,8 @@ def page_query():
                 top_k=top_k,
                 session_id=session_id,
                 iterations=iters,
+                page_start=page_start,
+                page_end=page_end,
             )
             elapsed = round(time.time() - t0, 1)
 
