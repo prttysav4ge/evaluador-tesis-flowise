@@ -6,7 +6,7 @@ Criterios de diseño:
     que pide texto académico plano listo para pegar en la tesis.
   - Bajo consumo de tokens: reciben sólo lo necesario de la memoria acumulada
   - Cada agente tiene un ROL único y claro
-  - El Mentor Final sintetiza todo para el estudiante
+  - El agente Síntesis y Consenso sintetiza todo para el estudiante
 """
 from __future__ import annotations
 import json
@@ -14,13 +14,13 @@ from typing import Any, Dict
 
 
 # ====================================================================== #
-#  AGENTE 1 — Mentor Intake (evaluación inicial)                         #
+#  AGENTE 1 — Supervisor (triage inicial del panel)                      #
 # ====================================================================== #
 
 def build_mentor_intake_prompt(question: str, context: str) -> str:
-    return f"""Eres el MENTOR DE EVALUACIÓN INICIAL de tesis universitarias.
+    return f"""Eres el SUPERVISOR del panel multiagente de evaluación de tesis universitarias.
 
-ROL: Realizar la evaluación inicial de la pregunta del evaluador sobre la tesis.
+ROL: Hacer el triage inicial del contexto recuperado y la pregunta del evaluador, y delimitar qué van a evaluar los demás agentes del panel (Investigador, Auditor, Metodólogo, Redactor, Síntesis).
 
 === CONTEXTO RECUPERADO DE LA TESIS ===
 {context}
@@ -53,9 +53,22 @@ RESPONDE ÚNICAMENTE en formato JSON válido, sin texto adicional antes ni despu
 # ====================================================================== #
 
 def build_investigador_prompt(
-    question: str, context: str, memory: Dict[str, Any]
+    question: str,
+    context: str,
+    memory: Dict[str, Any],
+    reference_context: str = "",
 ) -> str:
     mentor_summary = json.dumps(memory.get("mentor_intake", {}), ensure_ascii=False)
+    refs_block = (
+        f"\n=== BIBLIOTECA METODOLÓGICA (libros de referencia) ===\n{reference_context}\n"
+        if reference_context else ""
+    )
+    refs_instr = (
+        "6. Si la Biblioteca aporta principios relevantes, citalos al respaldar tus "
+        "observaciones (ej. 'según Hernández Sampieri...'). Privilegia la coincidencia "
+        "entre lo que dice la tesis y lo que recomienda la literatura metodológica.\n"
+        if reference_context else ""
+    )
     return f"""Eres el AGENTE INVESTIGADOR especializado en análisis de investigación académica.
 
 ROL: Analizar la calidad investigativa del fragmento de tesis.
@@ -65,8 +78,8 @@ ROL: Analizar la calidad investigativa del fragmento de tesis.
 
 === CONTEXTO DE LA TESIS ===
 {context}
-
-=== EVALUACIÓN PREVIA (Mentor Intake) ===
+{refs_block}
+=== EVALUACIÓN PREVIA (Supervisor) ===
 {mentor_summary}
 
 === INSTRUCCIONES ===
@@ -75,7 +88,7 @@ ROL: Analizar la calidad investigativa del fragmento de tesis.
 3. Identifica fortalezas y debilidades investigativas concretas.
 4. Sugiere 2-3 mejoras específicas y realizables.
 5. Asigna una puntuación de 0 a 10.
-
+{refs_instr}
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{
   "fortalezas": ["fortaleza1", "fortaleza2"],
@@ -84,7 +97,8 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
   "relevancia_cientifica": "alta|media|baja",
   "sugerencias": ["sugerencia1", "sugerencia2"],
   "puntuacion": 7.5,
-  "comentario": "análisis investigativo en 2-3 oraciones"
+  "comentario": "análisis investigativo en 2-3 oraciones",
+  "biblioteca_aplicada": ["principio/cita del libro X usado", "..."]
 }}"""
 
 
@@ -137,13 +151,26 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
 # ====================================================================== #
 
 def build_metodologico_prompt(
-    question: str, context: str, memory: Dict[str, Any]
+    question: str,
+    context: str,
+    memory: Dict[str, Any],
+    reference_context: str = "",
 ) -> str:
     prev_summary = json.dumps(
         {k: memory[k] for k in ["mentor_intake", "investigador", "auditor"] if k in memory},
         ensure_ascii=False,
     )
-    return f"""Eres el AGENTE METODOLÓGICO especializado en marcos y diseños de investigación científica.
+    refs_block = (
+        f"\n=== BIBLIOTECA METODOLÓGICA (libros de referencia) ===\n{reference_context}\n"
+        if reference_context else ""
+    )
+    refs_instr = (
+        "6. CRÍTICO: contrasta lo que hace la tesis con las recomendaciones de los libros "
+        "de la Biblioteca. Si difieren, indícalo explícitamente. Si coinciden, refuerza la "
+        "evaluación citando la fuente. La Biblioteca es tu fuente de verdad metodológica.\n"
+        if reference_context else ""
+    )
+    return f"""Eres el METODÓLOGO del panel multiagente, especializado en marcos y diseños de investigación científica.
 
 ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesis.
 
@@ -152,7 +179,7 @@ ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesi
 
 === CONTEXTO DE LA TESIS ===
 {context}
-
+{refs_block}
 === EVALUACIONES PREVIAS ===
 {prev_summary}
 
@@ -162,7 +189,7 @@ ROL: Evaluar el enfoque y diseño metodológico presente en el fragmento de tesi
 3. Analiza instrumentos o técnicas de recolección mencionados.
 4. Identifica limitaciones metodológicas explícitas o implícitas.
 5. Sugiere ajustes metodológicos concretos.
-
+{refs_instr}
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{
   "enfoque": "cualitativo|cuantitativo|mixto|no_especificado",
@@ -173,7 +200,9 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
   "limitaciones_metodologicas": ["limitacion1"],
   "sugerencias_metodologicas": ["sugerencia1"],
   "puntuacion_metodologia": 7.0,
-  "comentario": "análisis metodológico en 2-3 oraciones"
+  "comentario": "análisis metodológico en 2-3 oraciones",
+  "alineacion_con_biblioteca": "alta|media|baja|no_aplica",
+  "citas_biblioteca": ["principio metodológico usado del libro X", "..."]
 }}"""
 
 
@@ -224,23 +253,49 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
 
 
 # ====================================================================== #
-#  AGENTE 6 — Mentor Final (síntesis pedagógica)                         #
+#  AGENTE 6 — Síntesis y Consenso (cierre del panel multiagente)         #
 # ====================================================================== #
 
-def build_mentor_final_prompt(question: str, memory: Dict[str, Any]) -> str:
+def build_mentor_final_prompt(
+    question: str,
+    memory: Dict[str, Any],
+    previous_iteration: str | None = None,
+) -> str:
     # Serialización compacta (sin indent) para reducir el tamaño del prompt
     # y evitar que el agente 6 reciba >2000 tokens de contexto de agentes previos.
     full_memory = json.dumps(memory, ensure_ascii=False, separators=(",", ":"))
-    return f"""Eres el MENTOR FINAL de evaluación de tesis universitarias.
 
-ROL: Sintetizar las evaluaciones de todos los agentes y entregar feedback pedagógico final al estudiante.
+    # Bloque opcional con la síntesis de la iteración anterior. Si está
+    # presente, el agente debe refinarla, no repetirla. Si está vacío, el
+    # prompt funciona idéntico al original (primera iteración).
+    iter_block = (
+        f"\n=== SÍNTESIS DE LA ITERACIÓN ANTERIOR ===\n{previous_iteration}\n"
+        if previous_iteration else ""
+    )
+    iter_extra_instr = (
+        "10. CRÍTICO: recibiste la SÍNTESIS DE LA ITERACIÓN ANTERIOR. Tu tarea NO es "
+        "repetirla — es refinarla. Conserva lo que sigue siendo válido, agudiza lo que "
+        "quedó genérico, ajusta puntuación si el panel reveló matices nuevos, y revisita "
+        "el debate/consenso/disenso para incorporar precisiones. Cada iteración del panel "
+        "debe agregar valor.\n"
+        if previous_iteration else ""
+    )
+
+    return f"""Eres SÍNTESIS Y CONSENSO, el agente final del panel multiagente de evaluación de tesis.
+
+ROL: Integrar las evaluaciones del Supervisor, Investigador, Auditor, Metodólogo y Redactor en (a) un feedback pedagógico final y (b) la transcripción del DEBATE entre las 3 perspectivas centrales del panel.
+
+Las 3 perspectivas del debate son:
+  • Perspectiva FORMAL       → la voz del Auditor (rigor, coherencia, citas).
+  • Perspectiva METODOLÓGICA → la voz del Metodólogo (diseño, instrumentos, validez).
+  • Perspectiva CONTEXTUAL   → la voz del Investigador (literatura, antecedentes, evidencia).
 
 === PREGUNTA ORIGINAL ===
 {question}
 
-=== EVALUACIONES COMPLETAS DE LOS AGENTES ===
+=== EVALUACIONES COMPLETAS DEL PANEL ===
 {full_memory}
-
+{iter_block}
 === INSTRUCCIONES ===
 1. Sintetiza los hallazgos más importantes de TODOS los agentes previos.
 2. Identifica los 3 puntos fuertes principales de la tesis.
@@ -249,6 +304,9 @@ ROL: Sintetizar las evaluaciones de todos los agentes y entregar feedback pedag�
 5. Calcula la puntuación general (promedio ponderado de las puntuaciones previas).
 6. Redacta un mensaje constructivo, motivador y pedagógico para el estudiante.
 7. Indica el SIGUIENTE PASO concreto más importante.
+8. Reconstruye el DEBATE: resume en 2-3 oraciones lo que dijo cada una de las 3 perspectivas (formal/metodológica/contextual) y produce una síntesis breve.
+9. Lista 2-4 puntos de CONSENSO (donde las 3 perspectivas coinciden) y 2-4 puntos de DISENSO (donde 2 perspectivas chocan o se contradicen). Sé honesto: si no hay disenso real, devolvé [].
+{iter_extra_instr}
 
 RESPONDE ÚNICAMENTE en formato JSON válido:
 {{
@@ -263,7 +321,21 @@ RESPONDE ÚNICAMENTE en formato JSON válido:
   "puntuacion_general": 7.2,
   "nivel_tesis": "excelente|buena|aceptable|necesita_mejoras|insuficiente",
   "mensaje_pedagogico": "mensaje motivador y constructivo para el estudiante",
-  "siguiente_paso": "acción concreta más importante que debe realizar ahora"
+  "siguiente_paso": "acción concreta más importante que debe realizar ahora",
+  "debate": {{
+    "perspectiva_formal":       "resumen 2-3 oraciones de lo que dijo el Auditor",
+    "perspectiva_metodologica": "resumen 2-3 oraciones de lo que dijo el Metodólogo",
+    "perspectiva_contextual":   "resumen 2-3 oraciones de lo que dijo el Investigador",
+    "sintesis":                 "síntesis breve de cómo las 3 perspectivas se integran o se tensionan"
+  }},
+  "consenso": [
+    "punto donde las 3 perspectivas coinciden 1",
+    "punto donde las 3 perspectivas coinciden 2"
+  ],
+  "disenso": [
+    "punto donde 2 perspectivas chocan o se contradicen 1",
+    "(si no hay disenso real, devolver array vacío)"
+  ]
 }}"""
 
 
@@ -283,7 +355,7 @@ def build_texto_sugerido_prompt(
     sus debilidades y sugerencias guían qué debe cambiar en el contenido.
     La evaluación final aporta las recomendaciones priorizadas y áreas de mejora.
     """
-    # ── Datos del Mentor Final (o evaluación Flowise) ─────────────────────
+    # ── Datos de la Síntesis (o evaluación Flowise) ────────────────────────
     areas_mejora      = final_evaluation.get("areas_mejora", [])
     puntos_fuertes    = final_evaluation.get("puntos_fuertes", [])
     recomendaciones   = final_evaluation.get("recomendaciones_priorizadas", [])

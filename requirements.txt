@@ -41,6 +41,10 @@ streamlit>=1.35.0
 plotly>=5.20.0
 pandas>=1.4.0
 
+# Métricas NLP: comparación texto original vs texto sugerido
+rouge-score>=0.1.2    # ROUGE-1/2/L
+sacrebleu>=2.4.0       # BLEU
+
 # NOTA: ejecutar streamlit con:
 #   python -m streamlit run streamlit_app.py
 # en lugar de "streamlit run ..." (el exe puede no estar en el PATH)

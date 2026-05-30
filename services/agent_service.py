@@ -7,26 +7,27 @@ localmente usando LangChain + el LLM configurado.
 Ventaja: funciona sin tener Flowise corriendo (ideal para testing inicial).
 Desventaja: consume tokens del LLM por cada agente (6 llamadas por query).
 
-Pipeline:
+Pipeline (los keys de memory se mantienen por compatibilidad con el frontend
+y el state de Flowise; las etiquetas visibles ya son las nuevas):
   retrieved_context
        │
        ▼
-  [Mentor Intake]  → memory["mentor_intake"]
+  [Supervisor]            → memory["mentor_intake"]
        │
        ▼
-  [Investigador]   → memory["investigador"]
+  [Investigador]          → memory["investigador"]
        │
        ▼
-  [Auditor]        → memory["auditor"]
+  [Auditor]               → memory["auditor"]
        │
        ▼
-  [Metodológico]   → memory["metodologico"]
+  [Metodólogo]            → memory["metodologico"]
        │
        ▼
-  [Redactor]       → memory["redactor"]
+  [Redactor]              → memory["redactor"]
        │
        ▼
-  [Mentor Final]   → memory["mentor_final"]  ← respuesta final
+  [Síntesis y Consenso]   → memory["mentor_final"]  ← respuesta final
 """
 from __future__ import annotations
 
@@ -282,9 +283,18 @@ async def _run_agent(
 async def run_sequential_pipeline(
     question: str,
     retrieved_context: str,
+    reference_context: str = "",
+    previous_iteration: str | None = None,
 ) -> Dict[str, Any]:
     """
     Ejecuta los 6 agentes secuencialmente con memoria acumulativa.
+
+    Args:
+        retrieved_context: fragmentos relevantes del PDF de tesis (RAG primario).
+        reference_context: fragmentos de la Biblioteca Metodológica (RAG cruzado).
+        previous_iteration: síntesis de la iteración anterior (JSON string).
+            Vacía en la primera iteración del panel. Cuando esté presente, el
+            agente Síntesis la usa para refinar en lugar de empezar de cero.
 
     La memoria se va enriqueciendo con la salida de cada agente.
     Cada agente recibe solo el resumen de los agentes anteriores
@@ -314,9 +324,11 @@ async def run_sequential_pipeline(
     memory["mentor_intake"] = await _run_agent("mentor_intake", prompt_1, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 2 — Investigador                                            #
+    #  Agente 2 — Investigador (con Biblioteca cruzada)                   #
     # ------------------------------------------------------------------ #
-    prompt_2 = build_investigador_prompt(question, retrieved_context, memory)
+    prompt_2 = build_investigador_prompt(
+        question, retrieved_context, memory, reference_context=reference_context
+    )
     memory["investigador"] = await _run_agent("investigador", prompt_2, llm)
 
     # ------------------------------------------------------------------ #
@@ -326,9 +338,11 @@ async def run_sequential_pipeline(
     memory["auditor"] = await _run_agent("auditor", prompt_3, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 4 — Metodológico                                            #
+    #  Agente 4 — Metodológico (con Biblioteca cruzada — agente clave)    #
     # ------------------------------------------------------------------ #
-    prompt_4 = build_metodologico_prompt(question, retrieved_context, memory)
+    prompt_4 = build_metodologico_prompt(
+        question, retrieved_context, memory, reference_context=reference_context
+    )
     memory["metodologico"] = await _run_agent("metodologico", prompt_4, llm)
 
     # ------------------------------------------------------------------ #
@@ -338,9 +352,11 @@ async def run_sequential_pipeline(
     memory["redactor"] = await _run_agent("redactor", prompt_5, llm)
 
     # ------------------------------------------------------------------ #
-    #  Agente 6 — Mentor Final (síntesis)                                 #
+    #  Agente 6 — Síntesis y Consenso (con iteración previa si aplica)    #
     # ------------------------------------------------------------------ #
-    prompt_6 = build_mentor_final_prompt(question, memory)
+    prompt_6 = build_mentor_final_prompt(
+        question, memory, previous_iteration=previous_iteration
+    )
     memory["mentor_final"] = await _run_agent("mentor_final", prompt_6, llm)
 
     return {

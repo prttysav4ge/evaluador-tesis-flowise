@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from services.pdf_service import process_pdf
+from services.pdf_service import is_scanned_pdf, process_pdf
 from vectorstore.chroma_store import chroma_store
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,22 @@ async def upload_pdf(
     filename = file.filename or "tesis_sin_nombre.pdf"
 
     # ------------------------------------------------------------------ #
+    #  Validación: PDF escaneado sin OCR                                    #
+    # ------------------------------------------------------------------ #
+    # Hacemos esta verificación ANTES del procesamiento completo para
+    # rechazar rápido y con mensaje claro, en vez de fallar más adelante
+    # con un 422 ambiguo al no encontrar chunks.
+    if is_scanned_pdf(pdf_bytes):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No se puede leer este PDF — parece escaneado sin OCR. "
+                "Convierte el PDF a texto (con un OCR como Adobe Acrobat, "
+                "Tesseract o ABBYY FineReader) antes de subirlo."
+            ),
+        )
+
+    # ------------------------------------------------------------------ #
     #  Procesamiento                                                       #
     # ------------------------------------------------------------------ #
     logger.info(f"📥 PDF recibido: '{filename}' ({size_mb:.2f} MB)")
@@ -116,6 +132,9 @@ async def upload_pdf(
         "chunks_generated": len(chunks),
         "chunks_stored": stored,
         "sections_found": result["sections_found"],
+        # Outline jerárquico (1.1.1) con chunks_count y chars_count por sección.
+        # Vacío si el PDF no usa numeración; el frontend cae a sections_found.
+        "outline": result.get("outline", []),
         "message": (
             f"✅ PDF procesado correctamente. "
             f"{stored} fragmentos almacenados en ChromaDB. "

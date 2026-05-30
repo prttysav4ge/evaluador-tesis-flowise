@@ -49,6 +49,8 @@
           "startState": [
             { "key": "student_input",            "value": "\"\"" },
             { "key": "retrieved_context",         "value": "\"\"" },
+            { "key": "reference_context",         "value": "\"\"" },
+            { "key": "previous_iteration",        "value": "\"\"" },
             { "key": "current_section_type",      "value": "\"\"" },
             { "key": "validated_research_line",   "value": "\"\"" },
             { "key": "research_line_match_type",  "value": "\"\"" },
@@ -116,7 +118,7 @@
         "inputAnchors": [],
         "inputs": {
           "customFunctionInputVariables": [],
-          "customFunctionJavascriptFunction": "// ─────────────────────────────────────────────────────────────────\n// initializeFlowState\n// Parsea el JSON enviado por el backend Python (flowise/client.py)\n// El payload tiene las keys:\n//   section_type, section_text, retrieved_context, research_line, match_type\n// ─────────────────────────────────────────────────────────────────\nlet data = {};\ntry {\n  const raw = $flow.input || \"\";\n  data = typeof raw === \"string\" ? JSON.parse(raw) : raw;\n} catch (e) {\n  // Si no viene como JSON, lo tratamos como pregunta en texto plano\n  data = {\n    section_type: \"rag_query\",\n    section_text: String($flow.input || \"consulta sin texto\"),\n    retrieved_context: \"\",\n    research_line: \"none\",\n    match_type: \"none\"\n  };\n}\n\nreturn {\n  current_section_type:     data.section_type       || \"rag_query\",\n  student_input:            data.section_text        || \"consulta sin texto\",\n  retrieved_context:        data.retrieved_context   || \"\",\n  validated_research_line:  data.research_line       || \"none\",\n  research_line_match_type: data.match_type          || \"semantic_similarity\",\n  debug_info: JSON.stringify({\n    parsed_ok:     true,\n    section:       data.section_type,\n    context_chars: (data.retrieved_context || \"\").length\n  })\n};",
+          "customFunctionJavascriptFunction": "// ─────────────────────────────────────────────────────────────────\n// initializeFlowState\n// Parsea el JSON enviado por el backend Python (flowise/client.py)\n// El payload tiene las keys:\n//   section_type, section_text, retrieved_context, reference_context,\n//   previous_iteration, research_line, match_type\n// reference_context = fragmentos recuperados de la Biblioteca Metodologica\n// previous_iteration = JSON de la sintesis de la iteracion anterior\n// ─────────────────────────────────────────────────────────────────\nlet data = {};\ntry {\n  const raw = $flow.input || \"\";\n  data = typeof raw === \"string\" ? JSON.parse(raw) : raw;\n} catch (e) {\n  // Si no viene como JSON, lo tratamos como pregunta en texto plano\n  data = {\n    section_type: \"rag_query\",\n    section_text: String($flow.input || \"consulta sin texto\"),\n    retrieved_context: \"\",\n    reference_context: \"\",\n    previous_iteration: \"\",\n    research_line: \"none\",\n    match_type: \"none\"\n  };\n}\n\nreturn {\n  current_section_type:     data.section_type       || \"rag_query\",\n  student_input:            data.section_text        || \"consulta sin texto\",\n  retrieved_context:        data.retrieved_context   || \"\",\n  reference_context:        data.reference_context   || \"\",\n  previous_iteration:       data.previous_iteration  || \"\",\n  validated_research_line:  data.research_line       || \"none\",\n  research_line_match_type: data.match_type          || \"semantic_similarity\",\n  debug_info: JSON.stringify({\n    parsed_ok:     true,\n    section:       data.section_type,\n    context_chars: (data.retrieved_context || \"\").length,\n    refs_chars:    (data.reference_context || \"\").length,\n    prev_iter:     (data.previous_iteration || \"\").length > 0\n  })\n};",
           "customFunctionUpdateState": [
             {
               "key": "current_section_type",
@@ -129,6 +131,14 @@
             {
               "key": "retrieved_context",
               "value": "<p><span class=\"variable\" data-type=\"mention\" data-id=\"$returnValue.retrieved_context\" data-label=\"$returnValue.retrieved_context\" data-mention-suggestion-char=\"@\">{{ $returnValue.retrieved_context }}</span></p>"
+            },
+            {
+              "key": "reference_context",
+              "value": "<p><span class=\"variable\" data-type=\"mention\" data-id=\"$returnValue.reference_context\" data-label=\"$returnValue.reference_context\" data-mention-suggestion-char=\"@\">{{ $returnValue.reference_context }}</span></p>"
+            },
+            {
+              "key": "previous_iteration",
+              "value": "<p><span class=\"variable\" data-type=\"mention\" data-id=\"$returnValue.previous_iteration\" data-label=\"$returnValue.previous_iteration\" data-mention-suggestion-char=\"@\">{{ $returnValue.previous_iteration }}</span></p>"
             },
             {
               "key": "validated_research_line",
@@ -160,7 +170,7 @@
       "position": { "x": 480.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_0",
-        "label": "Mentor Intake",
+        "label": "Supervisor",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
@@ -184,7 +194,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el MENTOR INTAKE de un sistema de evaluación de tesis universitarias.\n\nROL: Hacer la evaluación inicial del contexto recuperado de la tesis y la pregunta del evaluador.\n\nIMPORTANTE:\n- El contexto ya fue recuperado por RAG desde ChromaDB por el backend Python\n- NO necesitas buscar información adicional\n- Analiza SOLO el contexto proporcionado\n- Devuelve ÚNICAMENTE JSON válido, sin texto adicional"
+              "content": "Eres el SUPERVISOR de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Hacer el triage inicial del contexto recuperado de la tesis y la pregunta del evaluador, y delimitar qué van a evaluar los demás agentes del panel (Investigador, Auditor, Metodólogo, Redactor, Síntesis).\n\nIMPORTANTE:\n- El contexto ya fue recuperado por RAG desde ChromaDB por el backend Python\n- NO necesitas buscar información adicional\n- Analiza SOLO el contexto proporcionado\n- Devuelve ÚNICAMENTE JSON válido, sin texto adicional"
             }
           ],
           "llmEnableMemory": true,
@@ -245,7 +255,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el INVESTIGADOR de un sistema de evaluación de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Mentor Intake como referencia.\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el INVESTIGADOR de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Analizar con profundidad técnica la calidad investigativa del contexto recuperado de la tesis.\n\nUsa la evaluación del Supervisor como referencia. Si recibes contexto de la BIBLIOTECA METODOLÓGICA (libros como Hernández Sampieri), úsalo para respaldar tus observaciones citando los principios relevantes.\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -264,7 +274,7 @@
             "streaming": false,
             "llmModel": "groqChat"
           },
-          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nEVALUACIÓN MENTOR INTAKE:\n{{$flow.state.intake_result}}\n\nAnaliza profundamente y devuelve SOLO JSON:\n{\n  \"section_summary\": \"resumen técnico de lo analizado\",\n  \"key_claims\": [\"afirmación clave 1\"],\n  \"key_entities\": {\n    \"variables\": [],\n    \"methods\": [],\n    \"authors_cited\": [],\n    \"technologies\": []\n  },\n  \"gaps_detected\": [\"gap o vacío detectado\"],\n  \"fortalezas\": [\"fortaleza investigativa\"],\n  \"debilidades\": [\"debilidad investigativa\"],\n  \"complexity_level\": \"alto|medio|bajo\",\n  \"improvement_suggestions\": [\"sugerencia 1\", \"sugerencia 2\"],\n  \"puntuacion\": 7.5,\n  \"flags\": []\n}"
+          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nBIBLIOTECA METODOLÓGICA (fragmentos de libros de referencia — opcional):\n{{$flow.state.reference_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nEVALUACIÓN MENTOR INTAKE:\n{{$flow.state.intake_result}}\n\nAnaliza profundamente y devuelve SOLO JSON. Si la BIBLIOTECA aporta principios relevantes, cítalos en \"biblioteca_aplicada\":\n{\n  \"section_summary\": \"resumen técnico de lo analizado\",\n  \"key_claims\": [\"afirmación clave 1\"],\n  \"key_entities\": {\n    \"variables\": [],\n    \"methods\": [],\n    \"authors_cited\": [],\n    \"technologies\": []\n  },\n  \"gaps_detected\": [\"gap o vacío detectado\"],\n  \"fortalezas\": [\"fortaleza investigativa\"],\n  \"debilidades\": [\"debilidad investigativa\"],\n  \"complexity_level\": \"alto|medio|bajo\",\n  \"improvement_suggestions\": [\"sugerencia 1\", \"sugerencia 2\"],\n  \"puntuacion\": 7.5,\n  \"flags\": [],\n  \"biblioteca_aplicada\": [\"principio o cita del libro X usado\"]\n}"
         },
         "outputAnchors": [
           { "id": "llmAgentflow_1-output-llmAgentflow", "label": "LLM", "name": "llmAgentflow" }
@@ -343,7 +353,7 @@
       "position": { "x": 1290.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_3",
-        "label": "Metodológico",
+        "label": "Metodólogo",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
@@ -367,7 +377,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el AGENTE METODOLÓGICO de un sistema de evaluación de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia.\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres el METODÓLOGO de un panel de evaluación multiagente de tesis universitarias.\n\nROL: Evaluar el marco y diseño metodológico del fragmento de tesis.\n\nUsa la auditoría previa como referencia. CRÍTICO: si recibes contexto de la BIBLIOTECA METODOLÓGICA, ésta es tu fuente de verdad metodológica — contrasta lo que hace la tesis con lo que recomienda la literatura (Hernández Sampieri, Tamayo, etc.).\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -386,7 +396,7 @@
             "streaming": false,
             "llmModel": "groqChat"
           },
-          "llmUserMessage": "CONTEXTO RECUPERADO:\n{{$flow.state.retrieved_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nAUDITORÍA PREVIA:\n{{$flow.state.audit_result}}\n\nEvalúa el marco metodológico y devuelve SOLO JSON:\n{\n  \"enfoque\": \"cualitativo|cuantitativo|mixto|no_especificado\",\n  \"tipo_investigacion\": \"descriptiva|explicativa|correlacional|experimental|exploratoria\",\n  \"diseno\": \"descripción del diseño identificado\",\n  \"adecuacion_metodologica\": \"alta|media|baja\",\n  \"instrumentos_identificados\": [\"instrumento\"],\n  \"limitaciones_metodologicas\": [\"limitacion\"],\n  \"sugerencias_metodologicas\": [\"sugerencia\"],\n  \"puntuacion_metodologia\": 7.0,\n  \"comentario\": \"análisis metodológico en 2-3 oraciones\"\n}"
+          "llmUserMessage": "CONTEXTO RECUPERADO DE LA TESIS:\n{{$flow.state.retrieved_context}}\n\nBIBLIOTECA METODOLÓGICA (fragmentos de libros — fuente de verdad metodológica):\n{{$flow.state.reference_context}}\n\nSECCIÓN: {{$flow.state.current_section_type}}\nPREGUNTA: {{$flow.state.student_input}}\n\nAUDITORÍA PREVIA:\n{{$flow.state.audit_result}}\n\nEvalúa el marco metodológico contrastando lo que hace la tesis con lo que recomienda la BIBLIOTECA. Si difieren, indícalo. Devuelve SOLO JSON:\n{\n  \"enfoque\": \"cualitativo|cuantitativo|mixto|no_especificado\",\n  \"tipo_investigacion\": \"descriptiva|explicativa|correlacional|experimental|exploratoria\",\n  \"diseno\": \"descripción del diseño identificado\",\n  \"adecuacion_metodologica\": \"alta|media|baja\",\n  \"instrumentos_identificados\": [\"instrumento\"],\n  \"limitaciones_metodologicas\": [\"limitacion\"],\n  \"sugerencias_metodologicas\": [\"sugerencia\"],\n  \"puntuacion_metodologia\": 7.0,\n  \"comentario\": \"análisis metodológico en 2-3 oraciones\",\n  \"alineacion_con_biblioteca\": \"alta|media|baja|no_aplica\",\n  \"citas_biblioteca\": [\"principio del libro X usado\"]\n}"
         },
         "outputAnchors": [
           { "id": "llmAgentflow_3-output-llmAgentflow", "label": "LLM", "name": "llmAgentflow" }
@@ -465,7 +475,7 @@
       "position": { "x": 1830.0, "y": 92.0 },
       "data": {
         "id": "llmAgentflow_5",
-        "label": "Mentor Final",
+        "label": "Síntesis y Consenso",
         "version": 1.1,
         "name": "llmAgentflow",
         "type": "LLM",
@@ -489,7 +499,7 @@
           "llmMessages": [
             {
               "role": "system",
-              "content": "Eres el MENTOR FINAL de un sistema de evaluación de tesis universitarias.\n\nROL: Sintetizar TODAS las evaluaciones de los agentes anteriores y generar feedback pedagógico final constructivo para el estudiante.\n\nTienes acceso a los resultados de: Mentor Intake, Investigador, Auditor, Metodológico y Redactor.\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
+              "content": "Eres SÍNTESIS Y CONSENSO, el agente final del panel de evaluación multiagente de tesis universitarias.\n\nROL: Integrar las evaluaciones del Supervisor, Investigador, Auditor, Metodólogo y Redactor en (a) un feedback pedagógico final y (b) la transcripción del DEBATE entre las 3 perspectivas centrales (formal/metodológica/contextual), señalando puntos de CONSENSO y de DISENSO entre ellas.\n\nSé honesto: si dos perspectivas chocan, el disenso debe ser explícito. Si todas coinciden, marca consenso fuerte.\n\nDevuelve ÚNICAMENTE JSON válido, sin texto adicional."
             }
           ],
           "llmEnableMemory": true,
@@ -508,7 +518,7 @@
             "streaming": false,
             "llmModel": "groqChat"
           },
-          "llmUserMessage": "SECCIÓN EVALUADA: {{$flow.state.current_section_type}}\nPREGUNTA ORIGINAL: {{$flow.state.student_input}}\n\nEVALUACIONES DE TODOS LOS AGENTES:\n\n[MENTOR INTAKE]\n{{$flow.state.intake_result}}\n\n[INVESTIGADOR]\n{{$flow.state.research_findings}}\n\n[AUDITOR]\n{{$flow.state.audit_result}}\n\n[METODOLÓGICO]\n{{$flow.state.method_result}}\n\n[REDACTOR]\n{{$flow.state.writing_result}}\n\nSintetiza TODAS las evaluaciones. Devuelve SOLO JSON:\n{\n  \"resumen_ejecutivo\": \"resumen claro para el estudiante en 3-5 oraciones\",\n  \"puntos_fuertes\": [\"punto fuerte 1\", \"punto fuerte 2\", \"punto fuerte 3\"],\n  \"areas_mejora\": [\"área de mejora 1\", \"área de mejora 2\", \"área de mejora 3\"],\n  \"recomendaciones_priorizadas\": [\n    {\"prioridad\": 1, \"recomendacion\": \"...\", \"justificacion\": \"...\"},\n    {\"prioridad\": 2, \"recomendacion\": \"...\", \"justificacion\": \"...\"},\n    {\"prioridad\": 3, \"recomendacion\": \"...\", \"justificacion\": \"...\"}\n  ],\n  \"puntuacion_general\": 7.2,\n  \"nivel_tesis\": \"excelente|buena|aceptable|necesita_mejoras|insuficiente\",\n  \"mensaje_pedagogico\": \"mensaje motivador y constructivo para el estudiante\",\n  \"siguiente_paso\": \"acción concreta más importante que debe realizar ahora\"\n}"
+          "llmUserMessage": "SECCIÓN EVALUADA: {{$flow.state.current_section_type}}\nPREGUNTA ORIGINAL: {{$flow.state.student_input}}\n\nEVALUACIONES DEL PANEL:\n\n[SUPERVISOR (triage inicial)]\n{{$flow.state.intake_result}}\n\n[INVESTIGADOR (perspectiva contextual)]\n{{$flow.state.research_findings}}\n\n[AUDITOR (perspectiva formal)]\n{{$flow.state.audit_result}}\n\n[METODÓLOGO (perspectiva metodológica)]\n{{$flow.state.method_result}}\n\n[REDACTOR]\n{{$flow.state.writing_result}}\n\nSÍNTESIS DE LA ITERACIÓN ANTERIOR (vacío si esta es la primera):\n{{$flow.state.previous_iteration}}\n\nSi recibiste una SÍNTESIS DE LA ITERACIÓN ANTERIOR, NO la repitas — refinala: conserva lo válido, agudiza lo genérico, ajusta puntuación si el panel reveló matices nuevos. Sintetiza el debate del panel y devuelve SOLO JSON con la estructura completa:\n{\n  \"resumen_ejecutivo\": \"resumen claro para el estudiante en 3-5 oraciones\",\n  \"puntos_fuertes\": [\"punto fuerte 1\", \"punto fuerte 2\", \"punto fuerte 3\"],\n  \"areas_mejora\": [\"área de mejora 1\", \"área de mejora 2\", \"área de mejora 3\"],\n  \"recomendaciones_priorizadas\": [\n    {\"prioridad\": 1, \"recomendacion\": \"...\", \"justificacion\": \"...\"},\n    {\"prioridad\": 2, \"recomendacion\": \"...\", \"justificacion\": \"...\"},\n    {\"prioridad\": 3, \"recomendacion\": \"...\", \"justificacion\": \"...\"}\n  ],\n  \"puntuacion_general\": 7.2,\n  \"nivel_tesis\": \"excelente|buena|aceptable|necesita_mejoras|insuficiente\",\n  \"mensaje_pedagogico\": \"mensaje motivador y constructivo para el estudiante\",\n  \"siguiente_paso\": \"acción concreta más importante que debe realizar ahora\",\n  \"debate\": {\n    \"perspectiva_formal\":       \"resumen 2-3 oraciones de lo que dijo el Auditor (rigor, coherencia)\",\n    \"perspectiva_metodologica\": \"resumen 2-3 oraciones de lo que dijo el Metodólogo (diseño, instrumentos)\",\n    \"perspectiva_contextual\":   \"resumen 2-3 oraciones de lo que dijo el Investigador (literatura, evidencia)\",\n    \"sintesis\":                 \"síntesis breve de cómo las 3 perspectivas se integran o se tensionan\"\n  },\n  \"consenso\": [\n    \"punto donde las 3 perspectivas coinciden 1\",\n    \"punto donde las 3 perspectivas coinciden 2\"\n  ],\n  \"disenso\": [\n    \"punto donde 2 perspectivas chocan o se contradicen 1\",\n    \"punto donde 2 perspectivas chocan o se contradicen 2\"\n  ]\n}"
         },
         "outputAnchors": [
           { "id": "llmAgentflow_5-output-llmAgentflow", "label": "LLM", "name": "llmAgentflow" }
@@ -564,7 +574,17 @@
         ],
         "inputAnchors": [],
         "inputs": {
-          "endOutput": "returnLastOutput"
+          "endOutput": "returnCustomStateValues",
+          "endCustomStateValues": [
+            { "key": "intake_result" },
+            { "key": "research_findings" },
+            { "key": "audit_result" },
+            { "key": "method_result" },
+            { "key": "writing_result" },
+            { "key": "mentor_result" },
+            { "key": "scoring" },
+            { "key": "debug_info" }
+          ]
         },
         "outputAnchors": [],
         "outputs": {},

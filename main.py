@@ -54,14 +54,37 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     logger.info(f"   Modo agentes  : {'FLOWISE' if settings.USE_FLOWISE else 'PYTHON DIRECTO'}")
     logger.info("-" * 60)
 
-    # Inicializar ChromaDB
+    # Inicializar ChromaDB (colección de tesis)
     from vectorstore.chroma_store import chroma_store
     chroma_store.initialize()
+
+    # Inicializar colección de libros metodológicos (Biblioteca Metodológica).
+    from vectorstore.refs_store import refs_store, index_reference_books
+    refs_store.initialize()
 
     # Pre-cargar el modelo de embeddings (evita el cold-start en el primer request)
     logger.info("⏳ Pre-cargando modelo de embeddings…")
     from embeddings.embedder import embedder
     embedder._load_model()
+
+    # Auto-index de la Biblioteca Metodológica si la colección está vacía.
+    # En desarrollo local, el usuario puede haber corrido el script
+    # scripts/index_reference_books.py antes. En producción (Streamlit Cloud)
+    # esto es la única forma de poblar la colección — los PDFs viajan
+    # commiteados en reference_books/. El primer arranque después de un deploy
+    # tarda ~5-10 min adicionales mientras genera ~6,500 embeddings; los
+    # siguientes arranques son instantáneos porque la colección persiste en
+    # ./chroma_db/ entre reruns de la app (no entre redeploys).
+    refs_count = refs_store.collection.count()
+    if refs_count == 0:
+        logger.info("📚 Biblioteca Metodológica vacía — auto-indexando…")
+        try:
+            added = index_reference_books()
+            logger.info(f"📚 Auto-index completado: {added} chunks agregados")
+        except Exception as exc:
+            logger.exception(f"⚠️  Auto-index de biblioteca falló: {exc}")
+    else:
+        logger.info(f"📚 Biblioteca ya indexada: {refs_count} chunks")
     logger.info("✅ Sistema listo para recibir requests")
     _display_host = "localhost" if settings.HOST in ("0.0.0.0", "::") else settings.HOST
     logger.info(f"📖 Docs: http://{_display_host}:{settings.PORT}/docs")
@@ -108,10 +131,12 @@ app.add_middleware(
 from routes.upload import router as upload_router
 from routes.query import router as query_router
 from routes.admin import router as admin_router
+from routes.reference_books import router as refs_router
 
 app.include_router(upload_router, prefix="/api/v1", tags=["📥 Upload PDF"])
 app.include_router(query_router, prefix="/api/v1", tags=["🔍 Query & Agentes"])
 app.include_router(admin_router, prefix="/api/v1", tags=["⚙️ Admin"])
+app.include_router(refs_router, prefix="/api/v1", tags=["📚 Biblioteca"])
 
 
 # ====================================================================== #

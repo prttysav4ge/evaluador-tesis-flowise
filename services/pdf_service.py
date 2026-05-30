@@ -44,6 +44,171 @@ _SECTION_PATTERNS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bBIBLIOGRAF[IÍ]A|REFERENCIAS\b", re.I), "referencias"),
 ]
 
+# ---------------------------------------------------------------------- #
+#  Detección jerárquica por numeración 1.1.1                              #
+# ---------------------------------------------------------------------- #
+# Encabezados de sección con numeración jerárquica: 1.1, 1.1.1, 1.1.1.1.
+# Exigimos AL MENOS un punto (i.e. 2+ niveles) porque "9 SINOPSIS" o
+# "13 Capítulo" suelen ser numeros de pagina pegados al body por pypdf,
+# no encabezados reales. Las secciones de nivel-1 sin numeración tipo
+# 'INTRODUCCIÓN', 'METODOLOGÍA' las captura igualmente _SECTION_PATTERNS.
+# El título debe empezar con mayúscula o letra y tener 3-100 chars.
+# Se aplica con re.MULTILINE sobre el texto limpio de cada página.
+_HIERARCHICAL_HEADING_RE = re.compile(
+    r"^[ \t]*(\d{1,2}(?:\.\d{1,2}){1,3})\.?\s+([A-ZÁÉÍÓÚÑa-zá-úñ][^\n]{2,99})[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def _looks_like_bibliography_entry(title: str) -> bool:
+    """
+    Filtro heurístico: descarta líneas que parecen citas bibliográficas
+    (autores con año entre paréntesis) en lugar de títulos de sección.
+    """
+    return bool(re.search(r"\(\s*(?:19|20)\d{2}", title))
+
+
+# Líneas del índice (Table of Contents) tienen formato "Título ............ 15".
+# Detectamos 4+ puntos consecutivos como marcador robusto.
+_TOC_DOT_LEADER_RE = re.compile(r"\.{4,}")
+
+
+def _looks_like_toc_entry(title: str) -> bool:
+    """True si la línea parece una entrada del índice (tiene dot leaders)."""
+    return bool(_TOC_DOT_LEADER_RE.search(title))
+
+
+# Items del cronograma/calendario que el regex puede confundir con secciones
+# (ej. "7.1 Fecha de inicio", "7.2 Fecha de término" dentro del anexo de
+# cronograma). No son secciones evaluables — son metadata del proyecto.
+_NON_EVALUABLE_TITLE_RE = re.compile(
+    r"^(?:"
+    r"Fecha\s+(?:de\s+)?(?:inicio|t[eé]rmino|fin(?:alizaci[oó]n)?|entrega)"
+    r"|Per[ií]odo\s+(?:de\s+)?(?:ejecuci[oó]n|estudio|investigaci[oó]n)"
+    r"|Plazo\s+(?:de\s+)?(?:entrega|ejecuci[oó]n)"
+    r"|Duraci[oó]n\s+(?:del\s+)?(?:proyecto|estudio)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_non_evaluable_metadata(title: str) -> bool:
+    """
+    True si el título es metadata del proyecto (fechas, plazos, duración)
+    en lugar de una sección evaluable por el panel multiagente.
+    """
+    return bool(_NON_EVALUABLE_TITLE_RE.match(title.strip()))
+
+
+def _clean_heading_title(title: str) -> str:
+    """
+    Limpia el título: quita dot leaders residuales y número de página al
+    final ('Título .... 15' → 'Título'). Idempotente.
+    """
+    # Recortar todo desde el primer bloque de 2+ puntos consecutivos
+    title = re.split(r"\s*\.{2,}.*$", title, maxsplit=1)[0]
+    # Quitar número de página suelto al final ('Título 15')
+    title = re.sub(r"\s+\d{1,4}\s*$", "", title)
+    return title.strip()
+
+
+def extract_hierarchical_outline(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Detecta encabezados jerárquicos (1.1.1) en el texto de cada página y
+    construye un outline ordenado por aparición.
+
+    Returns:
+        [{"section_id": "1.1.1", "title": "Antecedentes", "page": 12, "level": 3}, ...]
+
+    Reglas para evitar falsos positivos:
+      - Líneas con dot leaders (4+ puntos consecutivos) se asumen TOC y se descartan.
+      - Citas bibliográficas con año entre paréntesis se descartan.
+      - Si un mismo section_id aparece varias veces, se conserva la ÚLTIMA
+        ocurrencia (la del cuerpo del documento, no la del índice).
+
+    Si el PDF no usa numeración, retorna lista vacía → el caller cae a keywords.
+    """
+    # Indexamos por section_id para conservar la última aparición.
+    by_id: Dict[str, Dict[str, Any]] = {}
+
+    for page_data in pages:
+        page_num = page_data["page"]
+        text     = page_data["text"]
+
+        for match in _HIERARCHICAL_HEADING_RE.finditer(text):
+            section_id = match.group(1).rstrip(".")
+            raw_title  = match.group(2).strip()
+
+            if _looks_like_bibliography_entry(raw_title):
+                continue
+            if _looks_like_toc_entry(raw_title):
+                continue   # es una línea del índice
+
+            title = _clean_heading_title(raw_title)
+            if len(title) < 3:
+                continue   # quedó vacío tras la limpieza
+            if _looks_like_non_evaluable_metadata(title):
+                continue   # fechas/plazos del cronograma, no secciones
+
+            by_id[section_id] = {
+                "section_id": section_id,
+                "title":      title,
+                "page":       page_num,
+                "level":      section_id.count(".") + 1,
+            }
+
+    # Ordenar por (página, id_natural) — los headings van en el orden del PDF.
+    def _natural_sort_key(h: Dict[str, Any]) -> tuple:
+        parts = [int(p) for p in h["section_id"].split(".")]
+        return (h["page"], parts)
+
+    outline = sorted(by_id.values(), key=_natural_sort_key)
+    logger.info(f"📑 Outline jerárquico detectado: {len(outline)} encabezados")
+    return outline
+
+
+def _assign_chunks_to_outline(
+    chunks: List[Dict[str, Any]],
+    outline: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Asigna cada chunk al heading más reciente cuyo `page` sea ≤ al `page`
+    del chunk. Esto agrupa los chunks bajo su sección padre.
+
+    Modifica `chunks` in-place añadiendo `metadata["outline_section_id"]`,
+    y devuelve un outline enriquecido con `chunks_count` + `chars_count`.
+
+    Limitación: cuando una página tiene más de un heading, todos los chunks
+    de esa página se asignan al ÚLTIMO heading anterior o de la propia página.
+    Se acepta esta imprecisión a cambio de no requerir offsets dentro de la página.
+    """
+    if not outline:
+        return []
+
+    sorted_outline = sorted(outline, key=lambda h: h["page"])
+    stats = {h["section_id"]: {"chunks": 0, "chars": 0} for h in sorted_outline}
+
+    for chunk in chunks:
+        page = chunk["metadata"].get("page", 0)
+        current = None
+        for heading in sorted_outline:
+            if heading["page"] <= page:
+                current = heading
+            else:
+                break
+        if current is None:
+            continue   # chunk anterior al primer heading; queda sin asignar
+        sid = current["section_id"]
+        chunk["metadata"]["outline_section_id"] = sid
+        stats[sid]["chunks"] += 1
+        stats[sid]["chars"]  += chunk["metadata"].get("char_count", 0)
+
+    return [
+        {**h, "chunks_count": stats[h["section_id"]]["chunks"],
+              "chars_count":  stats[h["section_id"]]["chars"]}
+        for h in sorted_outline
+    ]
+
 
 def detect_section(text: str) -> str:
     """
@@ -86,6 +251,43 @@ def extract_pages(pdf_bytes: bytes) -> List[Dict[str, Any]]:
 
     logger.info(f"📄 Páginas con contenido extraídas: {len(pages)} / {len(reader.pages)}")
     return pages
+
+
+def is_scanned_pdf(
+    pdf_bytes: bytes,
+    min_chars_per_page: int = 50,
+    ratio_threshold: float = 0.9,
+) -> bool:
+    """
+    Heurística para detectar PDFs sin capa de texto (escaneados sin OCR).
+
+    Returns:
+        True si al menos `ratio_threshold` (90% por default) de las páginas
+        tienen menos de `min_chars_per_page` (50 por default) caracteres
+        extraíbles. También True si el PDF está vacío.
+
+    Limitación: no detecta PDFs con OCR de mala calidad (texto basura);
+    sólo el caso claro de "no hay texto extraíble".
+    """
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+    except Exception:
+        return True  # PDF corrupto
+
+    total = len(reader.pages)
+    if total == 0:
+        return True
+
+    empty_pages = 0
+    for page in reader.pages:
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if len(text) < min_chars_per_page:
+            empty_pages += 1
+
+    return (empty_pages / total) >= ratio_threshold
 
 
 def build_chunks(
@@ -151,7 +353,10 @@ def process_pdf(
             "total_pages": int,
             "pages_with_content": int,
             "chunks": List[{"text": str, "metadata": dict}],
-            "sections_found": dict,
+            "sections_found": dict,           # conteo keyword-based (fallback)
+            "outline": List[dict],            # encabezados jerárquicos (1.1.1)
+                                              # con chunks_count y chars_count.
+                                              # Vacío si el PDF no usa numeración.
         }
     """
     from app.config import settings
@@ -166,11 +371,16 @@ def process_pdf(
         chunk_overlap=settings.CHUNK_OVERLAP,
     )
 
-    # Conteo de secciones detectadas
+    # Conteo de secciones detectadas (keyword-based, fallback al outline)
     sections_found: Dict[str, int] = {}
     for chunk in chunks:
         sec = chunk["metadata"]["section_detected"]
         sections_found[sec] = sections_found.get(sec, 0) + 1
+
+    # Outline jerárquico (1.1.1) — alimenta el dropdown de selección de sección.
+    # _assign_chunks_to_outline mutará chunks[*]['metadata']['outline_section_id'].
+    raw_outline = extract_hierarchical_outline(pages)
+    outline     = _assign_chunks_to_outline(chunks, raw_outline)
 
     return {
         "filename": filename,
@@ -178,4 +388,5 @@ def process_pdf(
         "pages_with_content": len(pages),
         "chunks": chunks,
         "sections_found": sections_found,
+        "outline": outline,
     }
