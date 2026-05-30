@@ -195,38 +195,65 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     # En cada iteración corremos el panel completo (6 agentes). A partir
     # de la iteración 2, la síntesis previa se pasa como contexto extra
     # al agente Síntesis para que refine en vez de empezar de cero.
-    iterations_history: list[Dict[str, Any]] = []
-    previous_iteration_text: Optional[str]   = None
-    final_result: Dict[str, Any]             = {}
-    mode: str                                = "python_agents"
+    async def _run_all_iterations() -> tuple[list, Dict[str, Any], str]:
+        """Corre todas las iteraciones. Se envuelve en un wait_for para acotar
+        el TOTAL de la evaluación (no cada iteración por separado)."""
+        history: list[Dict[str, Any]] = []
+        prev_text: Optional[str]      = None
+        last_result: Dict[str, Any]   = {}
+        run_mode: str                 = "python_agents"
 
-    for iter_num in range(1, body.iterations + 1):
-        logger.info(f"🔁 Iteración {iter_num}/{body.iterations}")
+        for iter_num in range(1, body.iterations + 1):
+            logger.info(f"🔁 Iteración {iter_num}/{body.iterations}")
 
-        if settings.USE_FLOWISE:
-            iter_result, iter_mode = await _call_flowise_with_fallback(
-                body.question, retrieved_context, reference_context,
-                body.session_id, previous_iteration=previous_iteration_text,
-            )
-        else:
-            iter_mode = "python_agents"
-            iter_result = await _call_python_agents(
-                body.question, retrieved_context, reference_context,
-                previous_iteration=previous_iteration_text,
-            )
+            if settings.USE_FLOWISE:
+                iter_result, iter_mode = await _call_flowise_with_fallback(
+                    body.question, retrieved_context, reference_context,
+                    body.session_id, previous_iteration=prev_text,
+                )
+            else:
+                iter_mode = "python_agents"
+                iter_result = await _call_python_agents(
+                    body.question, retrieved_context, reference_context,
+                    previous_iteration=prev_text,
+                )
 
-        # Extraemos el output de la síntesis de esta iteración para alimentar
-        # la siguiente. JSON string compacto para minimizar tokens.
-        iter_synthesis = _extract_synthesis_json(iter_result)
-        previous_iteration_text = iter_synthesis if iter_synthesis else None
+            # Extraemos el output de la síntesis de esta iteración para alimentar
+            # la siguiente. JSON string compacto para minimizar tokens.
+            iter_synthesis = _extract_synthesis_json(iter_result)
+            prev_text = iter_synthesis if iter_synthesis else None
 
-        iterations_history.append({
-            "iteration": iter_num,
-            "mode": iter_mode,
-            "result": iter_result,
-        })
-        final_result = iter_result
-        mode = iter_mode
+            history.append({
+                "iteration": iter_num,
+                "mode": iter_mode,
+                "result": iter_result,
+            })
+            last_result = iter_result
+            run_mode    = iter_mode
+
+        return history, last_result, run_mode
+
+    # Tope GLOBAL de la evaluación completa: a diferencia del tope por-iteración
+    # de _call_python_agents, este acota la suma de TODAS las iteraciones para
+    # que en Streamlit Cloud (TestClient sin timeout de socket) la UI no se
+    # cuelgue aunque haya varias iteraciones encadenadas.
+    try:
+        iterations_history, final_result, mode = await asyncio.wait_for(
+            _run_all_iterations(), timeout=_EVAL_GLOBAL_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            f"⏰ La evaluación completa superó el tope global de "
+            f"{_EVAL_GLOBAL_TIMEOUT}s. Abortando para no colgar la UI."
+        )
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"La evaluación superó el tope global de {_EVAL_GLOBAL_TIMEOUT}s. "
+                "Baja las iteraciones a 1 y el Top-K, verifica que el nodo End de "
+                "Flowise devuelva 'Last Output', o sube a Groq Dev Tier."
+            ),
+        )
 
     # El frontend espera el último iter como top-level (backward compat con
     # las 4 pestañas) y la historia completa en 'iterations_history' para
@@ -503,12 +530,17 @@ async def _call_flowise_with_fallback(
         )
 
 
-# Tope global para el pipeline Python (6 agentes secuenciales). En Streamlit
-# Cloud el backend corre vía TestClient en el mismo proceso, SIN timeout de
-# socket: si Groq aplica rate-limiting (tier gratuito), la cascada de
-# reintentos —6 agentes × 5 intentos × 30s ≈ 20 min— cuelga la UI
-# indefinidamente. Este tope corta y devuelve un error claro en su lugar.
-_PYTHON_PIPELINE_TIMEOUT = 180  # segundos
+# Dos topes complementarios para que la UI nunca se cuelgue en Streamlit Cloud
+# (TestClient en el mismo proceso, SIN timeout de socket):
+#   - _PYTHON_PIPELINE_TIMEOUT: por cada corrida del pipeline Python (6 agentes).
+#     Da un error específico y rápido en el caso común de 1 iteración.
+#   - _EVAL_GLOBAL_TIMEOUT: techo de la evaluación COMPLETA (todas las
+#     iteraciones + fallbacks de Flowise sumados). Evita que N iteraciones se
+#     acumulen sin control (p.ej. 3 × (Flowise 90s + Python 180s) ≈ 13 min).
+# Causa de fondo: Groq tier gratuito limita 6 llamadas LLM seguidas → 429 →
+# cascada de backoff. Sin estos topes: 6 agentes × 5 intentos × 30s ≈ 20 min.
+_PYTHON_PIPELINE_TIMEOUT = 180  # segundos, por corrida del pipeline Python
+_EVAL_GLOBAL_TIMEOUT     = 300  # segundos, techo de la evaluación completa
 
 
 async def _call_python_agents(
