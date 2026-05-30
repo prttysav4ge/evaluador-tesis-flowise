@@ -503,6 +503,14 @@ async def _call_flowise_with_fallback(
         )
 
 
+# Tope global para el pipeline Python (6 agentes secuenciales). En Streamlit
+# Cloud el backend corre vía TestClient en el mismo proceso, SIN timeout de
+# socket: si Groq aplica rate-limiting (tier gratuito), la cascada de
+# reintentos —6 agentes × 5 intentos × 30s ≈ 20 min— cuelga la UI
+# indefinidamente. Este tope corta y devuelve un error claro en su lugar.
+_PYTHON_PIPELINE_TIMEOUT = 180  # segundos
+
+
 async def _call_python_agents(
     question: str,
     context: str,
@@ -512,8 +520,25 @@ async def _call_python_agents(
     from services.agent_service import run_sequential_pipeline
 
     try:
-        return await run_sequential_pipeline(
-            question, context, reference_context, previous_iteration=previous_iteration
+        return await asyncio.wait_for(
+            run_sequential_pipeline(
+                question, context, reference_context, previous_iteration=previous_iteration
+            ),
+            timeout=_PYTHON_PIPELINE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            f"⏰ Pipeline Python superó {_PYTHON_PIPELINE_TIMEOUT}s "
+            "(probable rate-limit de Groq en tier gratuito). Abortando para no "
+            "colgar la UI."
+        )
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"La evaluación con agentes Python superó {_PYTHON_PIPELINE_TIMEOUT}s, "
+                "probablemente por rate-limiting de Groq (tier gratuito). "
+                "Reintenta con menos iteraciones / Top-K más bajo, o sube a Groq Dev Tier."
+            ),
         )
     except Exception as exc:
         logger.exception("Error en pipeline de agentes Python")
