@@ -180,5 +180,70 @@ class RefsStore:
         return True
 
 
+def index_reference_books(pdf_dir: str = "reference_books") -> int:
+    """
+    Indexa todos los PDFs de `pdf_dir` en la colección reference_books.
+    Idempotente: skip los archivos cuyo `source` ya está en la colección.
+
+    Usado por:
+      - scripts/index_reference_books.py (manual, ejecutable desde CLI).
+      - main.py lifespan en producción (auto-index al startup si la
+        colección Chroma está vacía — necesario en Streamlit Cloud donde
+        no podés correr scripts manualmente).
+
+    Returns:
+        Cantidad de chunks nuevos agregados (0 si todo ya estaba indexado).
+    """
+    from pathlib import Path
+    from services.pdf_service import process_pdf
+
+    refs_store.initialize()
+
+    base = Path(pdf_dir)
+    if not base.is_dir():
+        logger.warning(
+            f"index_reference_books: carpeta '{pdf_dir}' no existe. "
+            "Saltando indexación."
+        )
+        return 0
+
+    pdfs = sorted(base.glob("*.pdf"))
+    if not pdfs:
+        logger.warning(
+            f"index_reference_books: '{pdf_dir}' no tiene PDFs. "
+            "Saltando indexación."
+        )
+        return 0
+
+    existing_sources = {b["source"] for b in refs_store.list_books()}
+    total_added = 0
+    for pdf_path in pdfs:
+        filename = pdf_path.name
+        if filename in existing_sources:
+            logger.info(f"   ✔ skip (ya indexado): {filename}")
+            continue
+
+        logger.info(f"   📄 indexando: {filename}")
+        try:
+            result = process_pdf(pdf_path.read_bytes(), filename)
+        except Exception as exc:
+            logger.error(f"      ❌ error procesando: {exc}")
+            continue
+
+        chunks = result["chunks"]
+        if not chunks:
+            logger.warning("      ⚠️ sin chunks extraídos, saltando")
+            continue
+
+        texts     = [c["text"] for c in chunks]
+        metadatas = [c["metadata"] for c in chunks]
+        ids       = [f"refs::{filename}::{i:04d}" for i in range(len(chunks))]
+        n = refs_store.add_documents(texts, metadatas, ids)
+        total_added += n
+        logger.info(f"      ✅ {n} chunks indexados")
+
+    return total_added
+
+
 # Singleton importable
 refs_store = RefsStore()

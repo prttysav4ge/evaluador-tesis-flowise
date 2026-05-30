@@ -46,10 +46,12 @@ pyvenv.cfg
 chroma_db/
 
 # ----- Biblioteca Metodológica -----
-# PDFs de referencia (Hernández Sampieri, Tamayo, etc.) — NO se trackean.
-# Se indexan localmente con scripts/index_reference_books.py.
-reference_books/
+# Los PDFs de referencia SÍ se trackean en reference_books/ porque el
+# lifespan los auto-indexa en producción si la colección Chroma está vacía
+# (sin esto, Streamlit Cloud no tendría manera de ejecutar el indexador).
+# PDFs en cualquier otra ubicación quedan ignorados.
 *.pdf
+!reference_books/*.pdf
 
 # ----- Archivos de base de datos -----
 *.db

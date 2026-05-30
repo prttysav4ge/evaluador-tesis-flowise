@@ -59,16 +59,32 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     chroma_store.initialize()
 
     # Inicializar colección de libros metodológicos (Biblioteca Metodológica).
-    # No falla si está vacía — el script scripts/index_reference_books.py la
-    # puebla. Si no se ha corrido, el endpoint devuelve lista vacía y el
-    # sidebar muestra los libros sin contadores.
-    from vectorstore.refs_store import refs_store
+    from vectorstore.refs_store import refs_store, index_reference_books
     refs_store.initialize()
 
     # Pre-cargar el modelo de embeddings (evita el cold-start en el primer request)
     logger.info("⏳ Pre-cargando modelo de embeddings…")
     from embeddings.embedder import embedder
     embedder._load_model()
+
+    # Auto-index de la Biblioteca Metodológica si la colección está vacía.
+    # En desarrollo local, el usuario puede haber corrido el script
+    # scripts/index_reference_books.py antes. En producción (Streamlit Cloud)
+    # esto es la única forma de poblar la colección — los PDFs viajan
+    # commiteados en reference_books/. El primer arranque después de un deploy
+    # tarda ~5-10 min adicionales mientras genera ~6,500 embeddings; los
+    # siguientes arranques son instantáneos porque la colección persiste en
+    # ./chroma_db/ entre reruns de la app (no entre redeploys).
+    refs_count = refs_store.collection.count()
+    if refs_count == 0:
+        logger.info("📚 Biblioteca Metodológica vacía — auto-indexando…")
+        try:
+            added = index_reference_books()
+            logger.info(f"📚 Auto-index completado: {added} chunks agregados")
+        except Exception as exc:
+            logger.exception(f"⚠️  Auto-index de biblioteca falló: {exc}")
+    else:
+        logger.info(f"📚 Biblioteca ya indexada: {refs_count} chunks")
     logger.info("✅ Sistema listo para recibir requests")
     _display_host = "localhost" if settings.HOST in ("0.0.0.0", "::") else settings.HOST
     logger.info(f"📖 Docs: http://{_display_host}:{settings.PORT}/docs")
