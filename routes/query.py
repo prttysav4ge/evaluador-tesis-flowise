@@ -59,20 +59,27 @@ class QueryRequest(BaseModel):
             "el agente de Síntesis recibe la síntesis previa y la refina."
         ),
     )
+    seccion: Optional[str] = Field(
+        default=None,
+        description=(
+            "Nombre completo de la sección del TOC a evaluar (ej. '1.2 Objetivos'). "
+            "Si se envía, el retrieval se acota a esa sección y sus subsecciones "
+            "(metadata `seccion`), igual que langgraph. None = búsqueda semántica global."
+        ),
+    )
     page_start: Optional[int] = Field(
         default=None,
         ge=1,
         description=(
-            "Página inicial de la sección seleccionada. Si se envía, el retrieval "
-            "se acota a ese rango de páginas en vez de búsqueda semántica global."
+            "[Compat] Página inicial de la sección. Solo se usa si `seccion` no se "
+            "envía; acota el retrieval a ese rango de páginas."
         ),
     )
     page_end: Optional[int] = Field(
         default=None,
         ge=1,
         description=(
-            "Página final (inclusive) de la sección. Si es None pero page_start "
-            "está definido, el rango llega hasta el final del documento."
+            "[Compat] Página final (inclusive). Solo se usa si `seccion` no se envía."
         ),
     )
 
@@ -130,28 +137,40 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     # ------------------------------------------------------------------ #
     #  2. Retrieval desde ChromaDB                                        #
     # ------------------------------------------------------------------ #
-    # Filtro por rango de páginas: acota el retrieval a la sección elegida en
-    # el frontend (anti-cross-topic). Si no se envía, retrieval semántico global.
-    page_where = _build_page_where(body.page_start, body.page_end)
-    if page_where is not None:
-        logger.info(
-            f"🔍 Retrieval acotado a páginas [{body.page_start}–{body.page_end or 'fin'}] "
-            f"para: '{body.question[:60]}…'"
-        )
-    else:
-        logger.info(f"🔍 Buscando chunks relevantes para: '{body.question[:80]}…'")
-
+    # Prioridad de acotamiento (anti-cross-topic):
+    #   1) `seccion`  → recuperación por sección + subsecciones (metadata, como
+    #                   langgraph). Es el camino principal del nuevo frontend.
+    #   2) page_start/page_end → filtro por rango de páginas (compat).
+    #   3) ninguno    → búsqueda semántica global (Vista general).
     try:
-        raw_results = chroma_store.query(body.question, top_k=body.top_k, where=page_where)
-        # Degradación graciosa: si el filtro por sección no devuelve nada (p.ej.
-        # metadata de página inconsistente o sección sin chunks vectorizados),
-        # reintentamos con búsqueda global para no dejar al usuario sin evaluación.
-        if not raw_results and page_where is not None:
-            logger.warning(
-                "⚠️  El filtro por rango de páginas no devolvió fragmentos; "
-                "reintentando con búsqueda semántica global."
+        if body.seccion:
+            logger.info(
+                f"🔍 Retrieval acotado a sección '{body.seccion}' "
+                f"para: '{body.question[:60]}…'"
             )
-            raw_results = chroma_store.query(body.question, top_k=body.top_k)
+            raw_results = chroma_store.query_by_section(
+                body.seccion, fallback_question=body.question
+            )
+        else:
+            page_where = _build_page_where(body.page_start, body.page_end)
+            if page_where is not None:
+                logger.info(
+                    f"🔍 Retrieval acotado a páginas [{body.page_start}–{body.page_end or 'fin'}] "
+                    f"para: '{body.question[:60]}…'"
+                )
+            else:
+                logger.info(f"🔍 Buscando chunks relevantes para: '{body.question[:80]}…'")
+
+            raw_results = chroma_store.query(body.question, top_k=body.top_k, where=page_where)
+            # Degradación graciosa: si el filtro por rango de páginas no devuelve
+            # nada, reintentamos con búsqueda global para no dejar al usuario sin
+            # evaluación.
+            if not raw_results and page_where is not None:
+                logger.warning(
+                    "⚠️  El filtro por rango de páginas no devolvió fragmentos; "
+                    "reintentando con búsqueda semántica global."
+                )
+                raw_results = chroma_store.query(body.question, top_k=body.top_k)
     except Exception as exc:
         logger.exception("Error en retrieval ChromaDB")
         raise HTTPException(status_code=500, detail=f"Error en ChromaDB: {str(exc)}")
@@ -287,7 +306,7 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     #  4. Generar texto sugerido (post-pipeline, ambos modos)            #
     #     Se limita a 45 s para no superar el timeout total del cliente. #
     # ------------------------------------------------------------------ #
-    _TEXTO_SUGERIDO_TIMEOUT = 45  # segundos máximos para esta llamada extra
+    _TEXTO_SUGERIDO_TIMEOUT = 60  # segundos máximos para esta llamada extra
     try:
         from services.agent_service import generate_texto_sugerido
         evaluation_data       = _extract_evaluation_data(result)
@@ -539,8 +558,8 @@ async def _call_flowise_with_fallback(
 #     acumulen sin control (p.ej. 3 × (Flowise 90s + Python 180s) ≈ 13 min).
 # Causa de fondo: Groq tier gratuito limita 6 llamadas LLM seguidas → 429 →
 # cascada de backoff. Sin estos topes: 6 agentes × 5 intentos × 30s ≈ 20 min.
-_PYTHON_PIPELINE_TIMEOUT = 180  # segundos, por corrida del pipeline Python
-_EVAL_GLOBAL_TIMEOUT     = 300  # segundos, techo de la evaluación completa
+_PYTHON_PIPELINE_TIMEOUT = 300  # segundos, por corrida del pipeline Python
+_EVAL_GLOBAL_TIMEOUT     = 600  # segundos, techo de la evaluación completa
 
 
 async def _call_python_agents(

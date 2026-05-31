@@ -195,7 +195,7 @@ def index_reference_books(pdf_dir: str = "reference_books") -> int:
         Cantidad de chunks nuevos agregados (0 si todo ya estaba indexado).
     """
     from pathlib import Path
-    from services.pdf_service import process_pdf
+    from services.pdf_service import process_reference_pdf
 
     refs_store.initialize()
 
@@ -225,7 +225,7 @@ def index_reference_books(pdf_dir: str = "reference_books") -> int:
 
         logger.info(f"   📄 indexando: {filename}")
         try:
-            result = process_pdf(pdf_path.read_bytes(), filename)
+            result = process_reference_pdf(pdf_path.read_bytes(), filename)
         except Exception as exc:
             logger.error(f"      ❌ error procesando: {exc}")
             continue
