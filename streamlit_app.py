@@ -292,11 +292,15 @@ def api_list_chunks(limit=50, offset=0):
 
 
 def api_query(question, top_k=5, session_id=None, iterations=1,
-              page_start=None, page_end=None):
+              page_start=None, page_end=None, seccion=None):
     payload = {"question": question, "top_k": top_k, "iterations": iterations}
     if session_id:
         payload["session_id"] = session_id
-    # Rango de páginas: acota el retrieval a la sección elegida (None = global).
+    # Sección del TOC: acota el retrieval a esa sección + subsecciones (camino
+    # principal). El backend la prioriza sobre el rango de páginas.
+    if seccion:
+        payload["seccion"] = seccion
+    # Rango de páginas: fallback para PDFs sin TOC (None = global).
     if page_start is not None:
         payload["page_start"] = page_start
     if page_end is not None:
@@ -1172,8 +1176,10 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
                          help="Selecciona todo (Ctrl+A) y copia.")
     else:
         st.info(
-            "Texto sugerido no disponible. Verifica que `GROQ_API_KEY` esté "
-            "configurada en `.streamlit/secrets.toml`."
+            "Texto sugerido no disponible. Suele deberse al límite TPM de Groq "
+            "(tier free): el pipeline ya consumió la cuota de tokens del minuto y "
+            "la última llamada recibió un 429. Reintenta en ~1 min, baja las "
+            "iteraciones/Top-K, o revisa que `GROQ_API_KEY` esté configurada."
         )
 
     # ── Feedback del Auditor ─────────────────────────────────────────────
@@ -1788,12 +1794,12 @@ def _page_range_for_section(
 
 def _render_query_form_block(
     total_chunks: int,
-) -> tuple[str, int, str | None, bool, int | None, int | None]:
+) -> tuple[str, int, str | None, bool, int | None, int | None, str | None]:
     """
     Renderiza el Paso 2 — Configura y lanza la evaluación.
-    Devuelve (question, top_k, session_id, send_clicked, page_start, page_end).
-    page_start/page_end acotan el retrieval a las páginas de la sección elegida
-    (None, None en Vista general → retrieval global).
+    Devuelve (question, top_k, session_id, send_clicked, page_start, page_end, seccion).
+    `seccion` (nombre completo del TOC) acota el retrieval por metadata; si es None
+    (Vista general o PDF sin TOC) se usa page_start/page_end o búsqueda global.
 
     Layout (alineado con la app de referencia):
       - Banner verde 'PDF cargado: <nombre>'
@@ -1852,11 +1858,16 @@ def _render_query_form_block(
     )
     st.session_state["selected_section_id"] = selected_sid
 
-    # Rango de páginas de la sección: acota el retrieval a sus páginas reales.
-    # Vista general → (None, None): retrieval semántico global sin filtro.
+    # Sección a evaluar: en el camino TOC el outline trae el nombre completo en
+    # `seccion`, que el backend usa para acotar el retrieval por metadata
+    # (sección + subsecciones). Para PDFs sin TOC `seccion` no existe y caemos al
+    # rango de páginas. Vista general → sin filtro (retrieval semántico global).
     if selected_sid == _OVERVIEW_SECTION_ID:
+        seccion_full = None
         page_start, page_end = None, None
     else:
+        sel_entry    = outline[selected_idx - 1]   # -1 por la entrada overview
+        seccion_full = sel_entry.get("seccion")
         page_start, page_end = _page_range_for_section(outline, selected_sid)
 
     # Texto contextual debajo del dropdown
@@ -1928,7 +1939,7 @@ def _render_query_form_block(
     # Construir la pregunta a enviar al backend
     question = _build_question_from_section(selected_sid, selected_title)
 
-    return question, top_k, session_id or None, send, page_start, page_end
+    return question, top_k, session_id or None, send, page_start, page_end, seccion_full
 
 
 def page_query():
@@ -1973,7 +1984,7 @@ def page_query():
         return
 
     # ── Formulario Paso 2 (dropdown sección + slider + botón) ──────────
-    question, top_k, session_id, send, page_start, page_end = _render_query_form_block(total)
+    question, top_k, session_id, send, page_start, page_end, seccion = _render_query_form_block(total)
 
     # ── Ejecutar consulta + persistir resultado + avanzar al stage RESULTS
     if send and len(question.strip()) >= 5:
@@ -1992,6 +2003,7 @@ def page_query():
                 iterations=iters,
                 page_start=page_start,
                 page_end=page_end,
+                seccion=seccion,
             )
             elapsed = round(time.time() - t0, 1)
 

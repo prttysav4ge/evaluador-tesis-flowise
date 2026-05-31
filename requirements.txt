@@ -25,7 +25,8 @@ chromadb>=0.5.0
 sentence-transformers>=2.7.0
 
 # PDF Processing
-pypdf>=4.0.0
+pypdf>=4.0.0          # pre-check de PDF escaneado + fallback página-a-página
+pdfplumber>=0.11.0   # extracción TOC-aware (excluye índice, agrupa por sección)
 
 # Config y HTTP
 python-dotenv>=1.0.0
