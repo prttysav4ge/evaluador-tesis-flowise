@@ -27,16 +27,22 @@ from app.config import settings
 # ====================================================================== #
 #  Logging                                                                #
 # ====================================================================== #
+# El root SIEMPRE en INFO: si lo pusiéramos en DEBUG, librerías de terceros
+# (pdfminer token-por-token, watchdog evento-por-evento, chromadb) inundan el
+# arranque con miles de líneas y revientan el startup de Streamlit Cloud
+# ("Error running app"). El flag DEBUG solo sube el nivel de NUESTROS módulos.
 logging.basicConfig(
-    level=logging.DEBUG if settings.DEBUG else logging.INFO,
+    level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%H:%M:%S",
 )
-# pdfminer/pdfplumber emiten DEBUG token-por-token (miles de líneas por PDF) y
-# saturan el arranque en Streamlit Cloud → "Error running app". Los callamos a
-# WARNING SIEMPRE, sin importar settings.DEBUG. Igual para clientes HTTP verbosos.
-for _noisy in ("pdfminer", "pdfminer.psparser", "pdfminer.pdfinterp",
-               "pdfminer.cmapdb", "pdfplumber", "httpcore", "httpx", "urllib3"):
+_app_level = logging.DEBUG if settings.DEBUG else logging.INFO
+for _app in ("main", "app", "services", "routes", "vectorstore", "embeddings",
+             "flowise"):
+    logging.getLogger(_app).setLevel(_app_level)
+# Terceros especialmente verbosos: aún más callados, ni siquiera INFO.
+for _noisy in ("pdfminer", "pdfplumber", "watchdog", "chromadb",
+               "httpcore", "httpx", "urllib3"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
