@@ -32,6 +32,13 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%H:%M:%S",
 )
+# pdfminer/pdfplumber emiten DEBUG token-por-token (miles de líneas por PDF) y
+# saturan el arranque en Streamlit Cloud → "Error running app". Los callamos a
+# WARNING SIEMPRE, sin importar settings.DEBUG. Igual para clientes HTTP verbosos.
+for _noisy in ("pdfminer", "pdfminer.psparser", "pdfminer.pdfinterp",
+               "pdfminer.cmapdb", "pdfplumber", "httpcore", "httpx", "urllib3"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
