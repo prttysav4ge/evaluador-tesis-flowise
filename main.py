@@ -15,6 +15,7 @@ Endpoints principales:
 
 Docs interactivos: http://localhost:8000/docs
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -46,6 +47,10 @@ for _noisy in ("pdfminer", "pdfplumber", "watchdog", "chromadb",
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+# Guardamos referencias fuertes a las tareas de fondo: asyncio solo mantiene
+# referencias débiles y podría recolectarlas a media ejecución.
+_BG_TASKS: set[asyncio.Task] = set()
 
 
 # ====================================================================== #
@@ -81,21 +86,29 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     embedder._load_model()
 
     # Auto-index de la Biblioteca Metodológica si la colección está vacía.
-    # En desarrollo local, el usuario puede haber corrido el script
-    # scripts/index_reference_books.py antes. En producción (Streamlit Cloud)
-    # esto es la única forma de poblar la colección — los PDFs viajan
-    # commiteados en reference_books/. El primer arranque después de un deploy
-    # tarda ~5-10 min adicionales mientras genera ~6,500 embeddings; los
-    # siguientes arranques son instantáneos porque la colección persiste en
-    # ./chroma_db/ entre reruns de la app (no entre redeploys).
+    # En producción (Streamlit Cloud) esta es la única forma de poblar la
+    # colección — los PDFs viajan commiteados en reference_books/.
+    #
+    # NO BLOQUEANTE: pdfplumber procesa cientos de páginas (TOC-aware) y genera
+    # miles de embeddings; tarda minutos. Si bloqueáramos el lifespan, Streamlit
+    # Cloud mata el arranque por timeout ("Error running app"). Por eso lo
+    # lanzamos en un hilo de fondo: la app empieza a servir de inmediato y la
+    # Biblioteca se va poblando. Las consultas degradan con gracia mientras
+    # tanto (routes/query.py ya chequea collection.count() > 0 antes de usarla).
     refs_count = refs_store.collection.count()
     if refs_count == 0:
-        logger.info("📚 Biblioteca Metodológica vacía — auto-indexando…")
-        try:
-            added = index_reference_books()
-            logger.info(f"📚 Auto-index completado: {added} chunks agregados")
-        except Exception as exc:
-            logger.exception(f"⚠️  Auto-index de biblioteca falló: {exc}")
+        async def _bg_index_biblioteca() -> None:
+            try:
+                logger.info("📚 Biblioteca vacía — auto-indexando en SEGUNDO PLANO…")
+                added = await asyncio.to_thread(index_reference_books)
+                logger.info(f"📚 Auto-index de fondo completado: {added} chunks agregados")
+            except Exception as exc:
+                logger.exception(f"⚠️  Auto-index de biblioteca falló: {exc}")
+
+        _task = asyncio.create_task(_bg_index_biblioteca())
+        _BG_TASKS.add(_task)
+        _task.add_done_callback(_BG_TASKS.discard)
+        logger.info("📚 Biblioteca en indexado de fondo; la app ya acepta requests.")
     else:
         logger.info(f"📚 Biblioteca ya indexada: {refs_count} chunks")
     logger.info("✅ Sistema listo para recibir requests")
