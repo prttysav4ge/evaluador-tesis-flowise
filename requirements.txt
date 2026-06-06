@@ -42,9 +42,9 @@ streamlit>=1.35.0
 plotly>=5.20.0
 pandas>=1.4.0
 
-# Métricas NLP: comparación texto original vs texto sugerido
-rouge-score>=0.1.2    # ROUGE-1/2/L
-sacrebleu>=2.4.0       # BLEU
+# Métricas: las 4 vigentes (G-Eval, Gain, Cosine, Context Precision) no requieren
+# librerías extra — el juez usa langchain-openai (Groq) y el embedder ya instalado.
+# ROUGE/BLEU/Kappa fueron eliminados; Context Precision se reimplementa sin `ragas`.
 
 # NOTA: ejecutar streamlit con:
 #   python -m streamlit run streamlit_app.py

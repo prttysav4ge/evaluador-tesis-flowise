@@ -54,6 +54,31 @@ class Settings(BaseSettings):
     # ----- RAG -----
     TOP_K: int = 5
 
+    # ----- JUEZ G-EVAL / RÚBRICA -----
+    # Panel de jueces LLM-as-judge. DEBEN ser modelos DISTINTOS del generador
+    # (GROQ_MODEL) para evitar sesgo. Lista separada por comas; se instancian
+    # todos sobre la API de Groq (compatible OpenAI). Confirmar IDs vigentes en
+    # console.groq.com/docs/models si alguno deja de estar disponible.
+    GEVAL_JUDGE_MODELS: str = (
+        "llama-3.3-70b-versatile,openai/gpt-oss-20b,qwen/qwen3-32b"
+    )
+    # Umbral (proporción 0-1) del puntaje de rúbrica de la ENTRADA por encima del
+    # cual NO se reescribe (solo se recomienda pulir). Orientativo: 0.90.
+    REDACTOR_THRESHOLD: float = 0.90
+    # Métrica condicional (5). Solo válida con >=2 iteraciones equivalentes.
+    # Se deja escrita pero desactivada hasta cerrar las decisiones abiertas.
+    ENABLE_ITERATIVE_CONSISTENCY: bool = False
+
+    @property
+    def judge_models(self) -> list[str]:
+        """GEVAL_JUDGE_MODELS parseado a lista, sin vacíos ni duplicados (orden estable)."""
+        seen: dict[str, None] = {}
+        for m in self.GEVAL_JUDGE_MODELS.split(","):
+            m = m.strip()
+            if m and m not in seen:
+                seen[m] = None
+        return list(seen.keys())
+
     # ----- CHUNKING -----
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 150

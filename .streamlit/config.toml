@@ -1,0 +1,10 @@
+# Configuración de Streamlit.
+#
+# fileWatcherType = "none": desactiva el watcher de archivos que recorre los
+# submódulos de `transformers` (traído por sentence-transformers). Muchos modelos
+# de visión de transformers importan `torchvision` —que no instalamos ni usamos—
+# y el watcher imprime un traceback por cada uno al arrancar. Con "none" ese ruido
+# desaparece. Contrapartida: ya no hay auto-recarga al guardar; reinicia la app
+# manualmente (o pon "auto" temporalmente si quieres hot-reload mientras editas).
+[server]
+fileWatcherType = "none"
