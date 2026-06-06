@@ -18,8 +18,17 @@ import chromadb
 
 logger = logging.getLogger(__name__)
 
-# Límite de fragmentos por sección (~12 000 chars máx), igual que langgraph.
-MAX_FRAGMENTOS_SECCION = 20
+# Tope de seguridad de fragmentos por sección. La recuperación por metadato debe
+# traer TODOS los chunks de la sección (y subsecciones) elegida — no un top-k por
+# similitud — para que el juez de rúbrica evalúe la parte completa. El tope solo
+# evita un blow-up patológico en selecciones de muy alto nivel; 80 chunks
+# (~64 000 chars) cubre con holgura el subárbol de sección más grande de una tesis.
+# (El contexto enviado a Flowise lo recorta aparte el cliente con FLOWISE_MAX_CONTEXT_CHARS.)
+MAX_FRAGMENTOS_SECCION = 80
+
+# Cuando la recuperación por metadato no encuentra match y cae a búsqueda
+# semántica global, sí queremos un top-k acotado (no 80 resultados semánticos).
+_SECTION_FALLBACK_TOP_K = 8
 
 
 # ── Helpers de jerarquía de secciones (portados de langgraph tesis_store.py) ──
@@ -206,12 +215,12 @@ class ChromaStore:
             )
             return matched[:k]
 
-        # Fallback: búsqueda semántica global
+        # Fallback: búsqueda semántica global (top-k acotado, no el tope alto de metadata)
         logger.info(
             f"🔎 query_by_section('{seccion}') sin match por metadata; "
             "fallback a búsqueda semántica global."
         )
-        return self.query(fallback_question or seccion, top_k=k)
+        return self.query(fallback_question or seccion, top_k=_SECTION_FALLBACK_TOP_K)
 
     def format_context(self, results: List[Dict[str, Any]]) -> str:
         """
