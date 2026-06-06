@@ -551,45 +551,41 @@ def _render_fragmentation_table(
 
 def _render_rubrica_step() -> None:
     """
-    Paso 2 — Rúbrica de evaluación (opcional).
+    Paso 2 — Rúbrica de evaluación.
 
-    El usuario puede subir un PDF de su rúbrica personalizada. Por ahora
-    el archivo NO se procesa (solo se guarda el nombre en session_state);
-    una iteración futura puede vectorizarlo e inyectarlo como contexto.
+    El instrumento activo es `rubrica.json` (Hernández-Sampieri 2018, 100 pts,
+    15 secciones). El juez LLM califica SOLO contra ese archivo, seleccionando
+    dinámicamente las secciones que apliquen a la parte evaluada.
     """
-    rubric = RUBRICS.get(st.session_state.get("rubric_id", "upao_ing_sistemas"), {})
-    rubric_label = rubric.get("label",   "—")
-    rubric_items = rubric.get("items",   0)
+    st.header("Paso 2 — Rúbrica de evaluación")
 
-    st.header("Paso 2 — Rúbrica de evaluación (opcional)")
+    try:
+        from services import rubric_service
+        rub = rubric_service.load_rubrica()
+        secciones = rubric_service.all_sections()
+        total = rubric_service.puntaje_total()
+    except Exception as exc:
+        st.error(f"No se pudo cargar `rubrica.json`: {exc}")
+        return
 
-    col_upload, col_info = st.columns([1, 2])
+    st.success(
+        f"📋 Instrumento activo: **{rub.get('titulo', 'Rúbrica')}** — "
+        f"**{len(secciones)} secciones**, **{total:.0f} pts** máx.  \n"
+        f"_{rub.get('instrumento', 'LLM-as-Judge | Hernández-Sampieri 2018')}_"
+    )
+    st.caption(
+        "El juez califica SOLO contra esta rúbrica y selecciona dinámicamente las "
+        "secciones aplicables a la parte que evalúes (no usa secciones de otras partes)."
+    )
 
-    with col_upload:
-        rubric_file = st.file_uploader(
-            "Sube la rúbrica de evaluación (PDF)",
-            type=["pdf"],
-            help="Opcional. Si no subís nada, se usa la rúbrica oficial UPAO.",
-            key="_rubric_uploader",
+    with st.expander("Ver secciones y pesos de la rúbrica"):
+        import pandas as _pd
+        df = _pd.DataFrame(
+            [{"Sección": f"{s['numero']}. {s['nombre']}",
+              "Pts máx": s["puntaje_maximo"],
+              "Ítems": len(s.get("items", []))} for s in secciones]
         )
-        if rubric_file is not None:
-            st.session_state["custom_rubric_filename"] = rubric_file.name
-
-    with col_info:
-        custom = st.session_state.get("custom_rubric_filename", "")
-        if custom:
-            st.success(
-                f"✅ Rúbrica personalizada cargada: **{custom}**\n\n"
-                "_Por ahora solo se registra el archivo. La integración "
-                "completa con el pipeline llega en una iteración siguiente._"
-            )
-        else:
-            st.info(
-                f"Sin rúbrica subida — se usará la **rúbrica oficial {rubric_label}** "
-                f"({rubric_items} ítems).  \n"
-                "Puedes subir la rúbrica de tu jurado evaluador para obtener "
-                "una evaluación personalizada."
-            )
+        st.dataframe(df, hide_index=True, use_container_width=True)
 
 
 def _render_landing_intro() -> None:
@@ -1175,12 +1171,23 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
                          label_visibility="collapsed",
                          help="Selecciona todo (Ctrl+A) y copia.")
     else:
-        st.info(
-            "Texto sugerido no disponible. Suele deberse al límite TPM de Groq "
-            "(tier free): el pipeline ya consumió la cuota de tokens del minuto y "
-            "la última llamada recibió un 429. Reintenta en ~1 min, baja las "
-            "iteraciones/Top-K, o revisa que `GROQ_API_KEY` esté configurada."
-        )
+        rubrica = raw_result.get("rubrica") or {}
+        if rubrica and not rubrica.get("reescrito"):
+            entrada = rubrica.get("entrada") or {}
+            st.success(
+                "✅ El texto de entrada **alcanzó el umbral** de calidad "
+                f"({entrada.get('porcentaje', 0) * 100:.0f}% ≥ "
+                f"{rubrica.get('umbral', 0) * 100:.0f}%): **no se reescribió**.  \n"
+                "Revisa las **recomendaciones de pulido** por ítem en la pestaña "
+                "**📐 Rúbrica** (justificaciones de cada criterio)."
+            )
+        else:
+            st.info(
+                "Texto sugerido no disponible. Suele deberse al límite TPM de Groq "
+                "(tier free): el pipeline ya consumió la cuota de tokens del minuto y "
+                "la última llamada recibió un 429. Reintenta en ~1 min, baja las "
+                "iteraciones/Top-K, o revisa que `GROQ_API_KEY` esté configurada."
+            )
 
     # ── Feedback del Auditor ─────────────────────────────────────────────
     auditor = agents.get("auditor", {})
@@ -1458,87 +1465,146 @@ def _render_tab_rag(result: dict) -> None:
             )
 
 
+def _fmt_rubrica_total(agg: dict) -> str:
+    """Resumen de un agregado de rúbrica en las dos escalas + puntos."""
+    return (
+        f"{agg.get('puntaje_0_10', 0):.1f}/10 · "
+        f"{agg.get('nota_vigesimal', 0):.1f}/20 "
+        f"({agg.get('total_obtenido', 0):.2f}/{agg.get('total_maximo', 0):.0f} pts · "
+        f"{agg.get('porcentaje', 0) * 100:.0f}%)"
+    )
+
+
+def _render_rubrica_aggregate(agg: dict, titulo: str) -> None:
+    """Tabla por sección: Ítem | Criterio | Máx | Calif. | Justificación + subtotales."""
+    import pandas as _pd
+
+    st.markdown(f"**{titulo}** — {_fmt_rubrica_total(agg)}")
+    for sec in agg.get("secciones", []):
+        st.markdown(
+            f"_Sección {sec['numero']}. {sec['nombre']} — "
+            f"subtotal {sec['subtotal']:.2f}/{sec['subtotal_maximo']:.0f}_"
+        )
+        rows = [
+            {
+                "Ítem": it["id"],
+                "Criterio": it["criterio"],
+                "Máx": it["pts_max"],
+                "Calif.": it["calificacion"],
+                "Justificación": it.get("justificacion", ""),
+            }
+            for it in sec.get("items", [])
+        ]
+        st.dataframe(_pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+def _render_tab_rubrica(raw_result: dict) -> None:
+    """Pestaña — Rúbrica: tablas de ENTRADA (y SALIDA si se reescribió) + umbral."""
+    rubrica = raw_result.get("rubrica")
+    if not rubrica:
+        st.info(
+            "Evaluación con rúbrica no disponible para esta consulta "
+            "(pudo agotarse el tiempo o faltar la API key del juez)."
+        )
+        return
+
+    sel    = rubrica.get("secciones_seleccionadas", [])
+    umbral = rubrica.get("umbral", 0) * 100
+    st.caption(
+        f"Juez de rúbrica: `{rubrica.get('judge_model', '—')}` · "
+        f"Secciones aplicadas: {sel} · Umbral de reescritura: {umbral:.0f}%"
+    )
+
+    if rubrica.get("reescrito"):
+        st.warning(
+            "🔁 La nota de la **ENTRADA** quedó por debajo del umbral → el Redactor "
+            "produjo un **TEXTO DE SALIDA** mejorado (ver pestaña Evaluación)."
+        )
+    else:
+        st.success(
+            "✅ La nota de la **ENTRADA** alcanzó el umbral → **NO se reescribió**. "
+            "Revisa las justificaciones por ítem como recomendaciones de pulido."
+        )
+
+    entrada = rubrica.get("entrada")
+    if entrada:
+        _render_rubrica_aggregate(entrada, "📄 Calificación del TEXTO DE ENTRADA")
+
+    salida = rubrica.get("salida")
+    if salida:
+        st.markdown("---")
+        _render_rubrica_aggregate(salida, "✨ Calificación del TEXTO DE SALIDA (reescrito)")
+
+
 def _render_tab_reportes(
     question: str,
     result: dict,
     agents: dict,
     final_data: dict,
 ) -> None:
-    """Pestaña 4 — Reportes (métricas NLP + 3 descargas)."""
+    """Pestaña — Reportes (las 4 métricas + 3 descargas)."""
     import json as _json
 
-    # ── Métricas NLP ─────────────────────────────────────────────────────
-    st.subheader("📊 Métricas NLP")
+    # ── Las 4 métricas (precalculadas por el backend) ────────────────────
+    st.subheader("📊 Métricas de evaluación")
     st.caption(
-        "Comparan el _texto original_ analizado vs el _texto sugerido_ "
-        "(reescritura propuesta por el pipeline)."
+        "Calculadas durante la evaluación: G-Eval (calidad de la salida), Gain "
+        "(mejora entrada→salida), Cosine (guardrail) y Context Precision (RAG)."
     )
 
-    texto_sugerido   = result.get("result", {}).get("texto_sugerido")
-    original_context = result.get("result", {}).get("original_context", "") \
-        or result.get("context_preview", "")
+    raw_result       = result.get("result", {}) or {}
+    metrics          = raw_result.get("metrics") or {}
+    rubrica          = raw_result.get("rubrica") or {}
+    texto_sugerido   = raw_result.get("texto_sugerido")
+    original_context = raw_result.get("original_context", "") or result.get("context_preview", "")
 
-    # ── Extraer puntajes reales por iteración para Gain / Kappa ─────────
-    raw_result = result.get("result", {}) or {}
-    history    = raw_result.get("iterations_history") or []
-    iter_scores: list[float] = []
-    for entry in history:
-        _, iter_final = _agents_from_iteration_entry(entry)
-        iter_scores.append(_extract_score(iter_final))
-    iter_scores = [s for s in iter_scores if s]  # descarta ceros
-
-    final_score    = _extract_score(final_data)
-    first_score    = iter_scores[0] if iter_scores else None
-    multi_iter     = len(iter_scores) >= 2
-
-    metrics = st.session_state.get("last_metrics")
-
-    if not texto_sugerido or not original_context:
-        st.info("Las métricas requieren texto original + sugerido. No hay datos suficientes.")
-    elif metrics is None:
-        if st.button("🧮 Calcular métricas NLP", type="primary"):
-            with st.spinner("Calculando ROUGE / BLEU / similitud coseno…"):
-                from services.metrics_service import (
-                    compute_all, compute_iteration_consistency,
-                )
-                # Gain real: si hay múltiples iteraciones, score_before =
-                # puntaje de iter 1; si no, baseline neutral 5.0.
-                score_before = first_score if multi_iter else 5.0
-                metrics = compute_all(
-                    reference=original_context,
-                    hypothesis=texto_sugerido,
-                    score_before=score_before,
-                    score_after=final_score,
-                )
-                # Kappa proxy: consistencia entre iteraciones. None si N<2.
-                metrics["iteration_consistency"] = compute_iteration_consistency(iter_scores)
-                metrics["iter_scores"] = iter_scores
-                st.session_state["last_metrics"] = metrics
-                st.rerun()
+    if not metrics:
+        st.info(
+            "Las métricas se calculan automáticamente durante la evaluación; "
+            "no hay datos para esta consulta (pudo agotarse el tiempo del juez)."
+        )
     else:
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("ROUGE-1",      _fmt(metrics.get("rouge1")))
-        m2.metric("ROUGE-2",      _fmt(metrics.get("rouge2")))
-        m3.metric("ROUGE-L",      _fmt(metrics.get("rougeL")))
-        m4.metric("BLEU",         _fmt(metrics.get("bleu")))
-        m5, m6, m7, m8 = st.columns(4)
-        m5.metric("Cos sim",      _fmt(metrics.get("cosine_similarity")))
-        m6.metric("Gain Score",   _fmt(metrics.get("gain_score")))
-        # Cuando hay múltiples iteraciones, reemplazamos Kappa por la
-        # consistencia entre iteraciones (más interpretable que Cohen).
-        consistency = metrics.get("iteration_consistency")
-        if consistency is not None:
-            m7.metric("Consistencia iter.", _fmt(consistency),
-                      help="Proporción de iteraciones con puntaje dentro de ±1.0 del promedio.")
-        else:
-            m7.metric("Kappa",        _fmt(metrics.get("kappa")))
-        m8.metric("Puntaje 0-10", f"{final_score:.1f}")
+        geval = metrics.get("geval_score")
+        gain  = metrics.get("gain_score")
+        cos   = metrics.get("cosine_similarity")
+        cosf  = metrics.get("cosine_flag", "n/a")
+        cp    = metrics.get("context_precision")
 
-        if multi_iter:
-            scores_str = " → ".join(f"{s:.1f}" for s in iter_scores)
-            st.caption(f"_Puntajes por iteración: {scores_str}._")
-        if metrics.get("kappa") is None and consistency is None:
-            st.caption("_Kappa: requiere ≥2 iteraciones. Ajustá el slider del Paso 3 para activar._")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(
+            "G-Eval (1-5)", _fmt(geval),
+            help="LLM-as-judge (panel de modelos ≠ generador): calidad del TEXTO DE "
+                 "SALIDA contra la rúbrica. Métrica PRIMARIA de calidad.",
+        )
+        m2.metric(
+            "Gain Score", _fmt(gain),
+            help="Ganancia de Hake (post−pre)/(máx−pre). pre/post del MISMO juez de "
+                 "rúbrica — nunca de un auto-score de agente.",
+        )
+        cos_delta = {
+            "alto": "⚠ casi idéntico", "bajo": "⚠ posible desvío",
+            "ok": "ok", "n/a": None,
+        }.get(cosf)
+        m3.metric(
+            "Cosine (guardrail)", _fmt(cos), delta=cos_delta, delta_color="off",
+            help="Guardrail semántico entrada vs salida. NO mide calidad: muy alto = "
+                 "casi no reescribió; muy bajo = se desvió del sentido.",
+        )
+        m4.metric(
+            "Context Precision", _fmt(cp),
+            help="Relevancia de los fragmentos recuperados de los LIBROS indexados "
+                 "(componente RAG, variante sin referencia).",
+        )
+
+        if not rubrica.get("reescrito"):
+            st.caption(
+                "_La entrada superó el umbral → no se reescribió. Gain/Cosine/G-Eval "
+                "no aplican; revisa las recomendaciones de pulido en la pestaña Rúbrica._"
+            )
+        st.caption(
+            "_Iterative Consistency: métrica condicional desactivada "
+            "(solo válida con ≥2 iteraciones equivalentes)._"
+        )
 
     st.markdown("---")
 
@@ -1554,12 +1620,15 @@ def _render_tab_reportes(
         "final_evaluation":  final_data,
         "texto_sugerido":    texto_sugerido,
         "original_context":  original_context,
+        "rubrica":           rubrica,
+        "metrics":           metrics,
         "thread_id":         st.session_state.get("thread_id"),
-        "rubric_id":         st.session_state.get("rubric_id"),
         "iterations":        st.session_state.get("iterations"),
     }
     debate_md  = _build_debate_markdown(agents, final_data)
-    metricas   = metrics or {"info": "No calculadas todavía. Pulsa 'Calcular métricas NLP'."}
+    metricas   = {"metrics": metrics, "rubrica": rubrica} if metrics else {
+        "info": "Métricas no disponibles para esta consulta."
+    }
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -1680,7 +1749,7 @@ def _render_query_result_block(
     agent_outputs = _extract_agent_outputs(raw_result)
     final_data    = agent_outputs.get("mentor_final", {}) or {}
 
-    # ── Header: "Mentoría Completada" + 3 métricas ─────────────────────
+    # ── Header: "Mentoría Completada" + nota de RÚBRICA (no auto-score) ─
     st.success("✅ **Mentoría Completada**")
 
     # iterations_count viene del backend (cuantas pasadas se ejecutaron de
@@ -1688,27 +1757,39 @@ def _render_query_result_block(
     iterations = result.get("iterations_count") or len(
         raw_result.get("iterations_history", [])
     ) or 1
-    score      = _extract_score(final_data)
-    vigesimal  = round(score * 2, 1)
 
-    h1, h2, h3 = st.columns(3)
+    # La nota total proviene de la RÚBRICA (suma de puntos obtenidos sobre el
+    # máximo de las secciones evaluadas) — NUNCA del auto-score de un agente.
+    rubrica   = raw_result.get("rubrica") or {}
+    entrada   = rubrica.get("entrada") or {}
+    metrics   = raw_result.get("metrics") or {}
+    score10   = entrada.get("puntaje_0_10")
+    vigesimal = entrada.get("nota_vigesimal")
+    geval     = metrics.get("geval_score")
+
+    h1, h2, h3, h4 = st.columns(4)
     h1.metric("Iteraciones",     iterations)
-    h2.metric("Puntaje (0-10)",  f"{score:.1f}")
-    h3.metric("Nota vigesimal",  f"{vigesimal:.1f}")
+    h2.metric("Puntaje (0-10)",  _fmt(score10))
+    h3.metric("Nota vigesimal",  _fmt(vigesimal))
+    h4.metric("G-Eval (1-5)",    _fmt(geval),
+              help="Calidad del texto reescrito según el panel de jueces.")
     st.caption(
         f"Modo: `{result.get('mode', '—')}` · Chunks: {result.get('chunks_retrieved', '—')} · "
-        f"Tiempo: {result.get('elapsed_seconds', elapsed)} s"
+        f"Tiempo: {result.get('elapsed_seconds', elapsed)} s · "
+        f"Nota de la ENTRADA según rúbrica (secciones {rubrica.get('secciones_seleccionadas', '—')})"
     )
 
     st.markdown("---")
 
-    # ── 4 pestañas ──────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📋 Evaluación", "💬 Debate", "📖 Contexto RAG", "📊 Reportes",
+    # ── 5 pestañas ──────────────────────────────────────────────────────
+    tab1, tab_rub, tab2, tab3, tab4 = st.tabs([
+        "📋 Evaluación", "📐 Rúbrica", "💬 Debate", "📖 Contexto RAG", "📊 Reportes",
     ])
 
     with tab1:
         _render_tab_evaluation(agent_outputs, final_data, raw_result)
+    with tab_rub:
+        _render_tab_rubrica(raw_result)
     with tab2:
         _render_tab_debate(agent_outputs, final_data, raw_result)
     with tab3:
