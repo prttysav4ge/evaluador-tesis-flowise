@@ -1,0 +1,840 @@
+{
+  "titulo": "RÚBRICA DE EVALUACIÓN DE CALIDAD METODOLÓGICA",
+  "subtitulo": "Proyectos de tesis de pregrado en Ingeniería — UPAO 2026",
+  "instrumento": "Instrumento para LLM-as-Judge | Basado en Hernández-Sampieri (2018)",
+  "puntaje_total": 100,
+  "numero_de_secciones": 15,
+  "instrucciones_para_el_llm_evaluador": {
+    "introduccion": "Este instrumento debe usarse para evaluar de forma automática cada sección de un proyecto de tesis de Ingeniería de la UPAO. El evaluador (LLM-as-judge) debe:",
+    "pasos": [
+      "1. Leer el texto de la sección a evaluar con atención.",
+      "2. Revisar cada ítem de la rúbrica correspondiente a esa sección.",
+      "3. Asignar el puntaje indicado si el criterio SE CUMPLE COMPLETAMENTE, el 50% si se cumple parcialmente, o 0 si no se cumple.",
+      "4. Sumar los puntos obtenidos en la sección y reportar el subtotal.",
+      "5. El puntaje final es la suma de todos los subtotales (máximo 100 puntos)."
+    ],
+    "nota": "Los ítems están fundamentados en Hernández-Sampieri, R. & Mendoza Torres, C.P. (2018). Metodología de la investigación: Las rutas cuantitativa, cualitativa y mixta. McGraw-Hill. Los capítulos de referencia se indican en cada sección."
+  },
+  "regla_de_puntuacion": "Asignar el puntaje máximo (pts_max) si el criterio SE CUMPLE COMPLETAMENTE, el 50% (pts_parcial_50) si se cumple parcialmente, o 0 (pts_no_cumple) si no se cumple.",
+  "resumen_puntajes_por_seccion": [
+    {
+      "seccion": "1. Título del proyecto de tesis",
+      "puntaje_maximo": 5
+    },
+    {
+      "seccion": "2. Descripción y delimitación del problema",
+      "puntaje_maximo": 10
+    },
+    {
+      "seccion": "3. Formulación del problema (pregunta central)",
+      "puntaje_maximo": 5
+    },
+    {
+      "seccion": "4. Objetivos de la investigación",
+      "puntaje_maximo": 8
+    },
+    {
+      "seccion": "5. Importancia y justificación del estudio",
+      "puntaje_maximo": 7
+    },
+    {
+      "seccion": "6. Limitaciones del estudio",
+      "puntaje_maximo": 3
+    },
+    {
+      "seccion": "7. Marco teórico (antecedentes y base teórica)",
+      "puntaje_maximo": 12
+    },
+    {
+      "seccion": "8. Hipótesis",
+      "puntaje_maximo": 8
+    },
+    {
+      "seccion": "9. Variables y operacionalización",
+      "puntaje_maximo": 8
+    },
+    {
+      "seccion": "10. Matriz de consistencia",
+      "puntaje_maximo": 5
+    },
+    {
+      "seccion": "11. Tipo y método de investigación",
+      "puntaje_maximo": 5
+    },
+    {
+      "seccion": "12. Diseño del estudio",
+      "puntaje_maximo": 8
+    },
+    {
+      "seccion": "13. Población y muestra",
+      "puntaje_maximo": 8
+    },
+    {
+      "seccion": "14. Técnicas e instrumentos de recolección de datos",
+      "puntaje_maximo": 5
+    },
+    {
+      "seccion": "15. Técnicas de procesamiento y análisis de datos",
+      "puntaje_maximo": 3
+    },
+    {
+      "seccion": "TOTAL",
+      "puntaje_maximo": 100
+    }
+  ],
+  "secciones": [
+    {
+      "numero": 1,
+      "nombre": "Título del proyecto de tesis",
+      "puntaje_maximo": 5,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 35–36; criterios para un buen planteamiento",
+      "subtotal_maximo": 5,
+      "items": [
+        {
+          "id": "1.1",
+          "criterio": "El título refleja con precisión el fenómeno o variable dependiente que se estudia, sin términos vagos ni ambiguos.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "1.2",
+          "criterio": "El título incluye explícitamente la variable independiente o el factor causal/comparativo del estudio.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "1.3",
+          "criterio": "El título indica el contexto o unidad de análisis (institución, población, lugar o periodo) de forma que delimite el alcance.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "1.4",
+          "criterio": "El título no supera las 20 palabras y está redactado sin comillas, abreviaturas ni siglas sin definir.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "1.5",
+          "criterio": "El título es coherente con los objetivos, hipótesis y diseño del estudio (trazabilidad interna).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 2,
+      "nombre": "Descripción y delimitación del problema",
+      "puntaje_maximo": 10,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 37–44; criterios para plantear el problema cuantitativo",
+      "subtotal_maximo": 10,
+      "items": [
+        {
+          "id": "2.1",
+          "criterio": "Se presenta evidencia empírica (datos estadísticos, estudios previos o reportes oficiales) que demuestra la existencia del problema.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.2",
+          "criterio": "El problema está enmarcado desde lo global hacia lo local (contextualización multinivel: mundial → regional → local).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.3",
+          "criterio": "Se identifica con claridad la brecha de conocimiento o la deficiencia tecnológica/metodológica que motiva el estudio.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.4",
+          "criterio": "Se delimitan las variables principales del problema (qué se va a medir o comparar) de manera explícita.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.5",
+          "criterio": "Se delimita el alcance temporal y espacial del estudio (periodo y lugar de ejecución).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.6",
+          "criterio": "La descripción del problema es coherente con el tipo y diseño de investigación declarado más adelante.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.7",
+          "criterio": "Se mencionan las consecuencias o impacto negativo de no resolver el problema (argumento de urgencia o relevancia).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.8",
+          "criterio": "La redacción es clara, libre de ambigüedad y no mezcla el problema con la solución propuesta.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "2.9",
+          "criterio": "El problema puede ser investigado empíricamente, es decir, sus variables son observables o medibles.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 3,
+      "nombre": "Formulación del problema (pregunta central)",
+      "puntaje_maximo": 5,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 38–40; criterios para formular preguntas de investigación",
+      "subtotal_maximo": 5,
+      "items": [
+        {
+          "id": "3.1",
+          "criterio": "El problema está formulado como una pregunta clara, directa y sin ambigüedad (¿en qué medida?, ¿qué efecto?, ¿cómo se relaciona?).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "3.2",
+          "criterio": "La pregunta involucra al menos dos variables o conceptos y su posible relación, diferencia o efecto.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "3.3",
+          "criterio": "La pregunta es respondible mediante el diseño de investigación propuesto (no requiere datos imposibles de obtener).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "3.4",
+          "criterio": "La pregunta no es demasiado amplia ni demasiado estrecha; delimita un problema tratable en el tiempo del estudio.",
+          "pts_max": 0.75,
+          "pts_parcial_50": 0.38,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "3.5",
+          "criterio": "La pregunta es coherente con los objetivos (la respuesta a la pregunta equivale a lograr el objetivo general).",
+          "pts_max": 0.75,
+          "pts_parcial_50": 0.38,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 4,
+      "nombre": "Objetivos de la investigación",
+      "puntaje_maximo": 8,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 40–42; pp. 105–108",
+      "subtotal_maximo": 8,
+      "items": [
+        {
+          "id": "4.1",
+          "criterio": "El objetivo general inicia con un verbo en infinitivo de acción observable (determinar, evaluar, comparar, establecer, identificar).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.2",
+          "criterio": "El objetivo general es congruente con la pregunta central del estudio y abarca su totalidad.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.3",
+          "criterio": "Los objetivos específicos son derivaciones lógicas del objetivo general que, sumados, lo cubren completamente.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.4",
+          "criterio": "Cada objetivo específico es independiente (no se superponen entre sí) y aborda un aspecto distinto del problema.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.5",
+          "criterio": "Los objetivos son alcanzables con los recursos, tiempo y diseño declarados en el proyecto.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.6",
+          "criterio": "Los objetivos no confunden el medio con el fin (no describen actividades del investigador sino resultados esperados del estudio).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "4.7",
+          "criterio": "Existe correspondencia directa entre los objetivos específicos y las hipótesis específicas (trazabilidad).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 5,
+      "nombre": "Importancia y justificación del estudio",
+      "puntaje_maximo": 7,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 43–46; criterios de justificación",
+      "subtotal_maximo": 7,
+      "items": [
+        {
+          "id": "5.1",
+          "criterio": "La justificación teórica explica qué vacío de conocimiento llena el estudio o qué aporte hace a la teoría existente.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "5.2",
+          "criterio": "La justificación práctica señala a quién benefician los resultados y de qué manera concreta (beneficio específico, no genérico).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "5.3",
+          "criterio": "La justificación metodológica indica si se desarrolla, adapta o valida algún instrumento, método o técnica nueva.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "5.4",
+          "criterio": "La justificación social especifica el impacto en la comunidad, sector o sociedad afectada por el problema.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "5.5",
+          "criterio": "Las cuatro dimensiones de justificación (teórica, práctica, metodológica, social) están desarrolladas con argumentos propios, no como listas vacías.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "5.6",
+          "criterio": "La importancia del estudio está vinculada a la magnitud o prevalencia del problema descrito en la sección anterior.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 6,
+      "nombre": "Limitaciones del estudio",
+      "puntaje_maximo": 3,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2, pp. 46–47; viabilidad del estudio",
+      "subtotal_maximo": 3,
+      "items": [
+        {
+          "id": "6.1",
+          "criterio": "Se identifican limitaciones reales del estudio (acceso, tiempo, muestra, instrumentos) y no confunde limitaciones con debilidades del investigador.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "6.2",
+          "criterio": "Las limitaciones están relacionadas específicamente con la generalización de los resultados o con la cobertura del problema.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "6.3",
+          "criterio": "Se indica cómo las limitaciones se mitigan o se asumen sin invalidar los resultados del estudio.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 7,
+      "nombre": "Marco teórico (antecedentes y base teórica)",
+      "puntaje_maximo": 12,
+      "referencia": "Hernández-Sampieri (2018), Cap. 3, pp. 58–88; Cap. 4, pp. 89–110",
+      "subtotal_maximo": 12,
+      "items": [
+        {
+          "id": "7.1",
+          "criterio": "Los antecedentes presentados son investigaciones previas directamente relacionadas con las variables del estudio (no temas periféricos).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.2",
+          "criterio": "Cada antecedente incluye: autor(es), año, objetivo, metodología, resultado principal e implicación para el presente estudio.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.3",
+          "criterio": "Los antecedentes son recientes (últimos 5 años preferentemente, máximo 10 años salvo teorías seminales).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.4",
+          "criterio": "El marco histórico contextualiza la evolución del problema o fenómeno estudiado en el tiempo (si aplica).",
+          "pts_max": 0.5,
+          "pts_parcial_50": 0.25,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.5",
+          "criterio": "La base teórica de la variable independiente está sustentada en teorías, modelos o enfoques reconocidos de la disciplina.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.6",
+          "criterio": "La base teórica de la variable dependiente incluye su definición conceptual, dimensiones e indicadores.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.7",
+          "criterio": "Las teorías seleccionadas son coherentes con el enfoque cuantitativo del estudio (no mezcla sin justificación con marcos cualitativos).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.8",
+          "criterio": "La definición de términos básicos cubre todos los conceptos clave del título y del problema, con fuente citada.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.9",
+          "criterio": "El marco teórico en su conjunto sustenta y justifica la relación entre las variables propuesta en la hipótesis.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "7.10",
+          "criterio": "Las citas y referencias siguen un formato bibliográfico consistente (APA u otro declarado) sin mezclas de estilos.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 8,
+      "nombre": "Hipótesis",
+      "puntaje_maximo": 8,
+      "referencia": "Hernández-Sampieri (2018), Cap. 5, pp. 104–130; características de las hipótesis cuantitativas",
+      "subtotal_maximo": 8,
+      "items": [
+        {
+          "id": "8.1",
+          "criterio": "La hipótesis general establece una relación o diferencia entre la variable independiente y la dependiente de forma explícita.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.2",
+          "criterio": "La hipótesis está formulada como afirmación (no como pregunta) y en términos claros y medibles.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.3",
+          "criterio": "Las hipótesis específicas se derivan lógicamente de la hipótesis general y se corresponden con los objetivos específicos.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.4",
+          "criterio": "Las hipótesis son falsables empíricamente (pueden refutarse con datos).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.5",
+          "criterio": "Las variables en las hipótesis están operacionalizadas o son operacionalizables (tienen indicadores medibles).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.6",
+          "criterio": "Los supuestos básicos (del contexto o del fenómeno) son explícitos y coherentes con el marco teórico.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "8.7",
+          "criterio": "El número de hipótesis específicas es consistente con el número de objetivos específicos (correspondencia uno a uno o justificada).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 9,
+      "nombre": "Variables y operacionalización",
+      "puntaje_maximo": 8,
+      "referencia": "Hernández-Sampieri (2018), Cap. 5, pp. 130–145; Cap. 8, pp. 197–220",
+      "subtotal_maximo": 8,
+      "items": [
+        {
+          "id": "9.1",
+          "criterio": "La definición conceptual de cada variable está sustentada en un autor o teoría citada, no es elaborada sin respaldo.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.2",
+          "criterio": "La definición operacional especifica cómo se medirá la variable en este estudio (instrumento, escala, procedimiento).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.3",
+          "criterio": "Las dimensiones derivan lógicamente de la definición conceptual y cubren de forma exhaustiva el constructo.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.4",
+          "criterio": "Los indicadores son observables o medibles y corresponden a la dimensión que representan.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.5",
+          "criterio": "La escala de medición es coherente con la naturaleza de la variable (nominal, ordinal, de intervalo o razón) según Sampieri.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.6",
+          "criterio": "La tabla de operacionalización es completa: incluye variable, definición conceptual, definición operacional, dimensiones, indicadores, ítems y escala.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "9.7",
+          "criterio": "No existen variables mencionadas en la hipótesis que no aparezcan operacionalizadas en la tabla.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 10,
+      "nombre": "Matriz de consistencia",
+      "puntaje_maximo": 5,
+      "referencia": "Hernández-Sampieri (2018), Cap. 2 y Cap. 5; coherencia lógica del estudio",
+      "subtotal_maximo": 5,
+      "items": [
+        {
+          "id": "10.1",
+          "criterio": "El problema general, objetivo general e hipótesis general son coherentes entre sí (responden a lo mismo).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "10.2",
+          "criterio": "Los problemas, objetivos e hipótesis específicos tienen correspondencia uno a uno (trazabilidad vertical).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "10.3",
+          "criterio": "Las variables e indicadores en la matriz coinciden exactamente con los declarados en la sección de variables.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "10.4",
+          "criterio": "La metodología declarada en la matriz (enfoque, tipo, diseño, población, muestra) es coherente con el marco metodológico.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 11,
+      "nombre": "Tipo y método de investigación",
+      "puntaje_maximo": 5,
+      "referencia": "Hernández-Sampieri (2018), Cap. 1, pp. 4–24; Cap. 5, pp. 128–154",
+      "subtotal_maximo": 5,
+      "items": [
+        {
+          "id": "11.1",
+          "criterio": "El enfoque de investigación (cuantitativo) es coherente con la naturaleza del problema y los objetivos.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "11.2",
+          "criterio": "El tipo de investigación (aplicada/básica) está justificado en relación con el propósito del estudio.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "11.3",
+          "criterio": "El alcance del estudio (exploratorio, descriptivo, correlacional, explicativo) está correctamente identificado y justificado con base en el estado del conocimiento.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "11.4",
+          "criterio": "El método (hipotético-deductivo u otro) es coherente con el enfoque y el tipo de investigación declarados.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 12,
+      "nombre": "Diseño del estudio",
+      "puntaje_maximo": 8,
+      "referencia": "Hernández-Sampieri (2018), Cap. 7, pp. 154–185; tipos de diseños cuantitativos",
+      "subtotal_maximo": 8,
+      "items": [
+        {
+          "id": "12.1",
+          "criterio": "El diseño (experimental, cuasi-experimental, no experimental) está correctamente identificado según la manipulación o no de variables.",
+          "pts_max": 2,
+          "pts_parcial_50": 1,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "12.2",
+          "criterio": "Si es experimental o cuasi-experimental, se especifica el tipo de preprueba/posprueba, grupos de control y tratamiento.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "12.3",
+          "criterio": "El diseño es coherente con el alcance del estudio (un diseño correlacional no puede ser meramente descriptivo ni viceversa).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "12.4",
+          "criterio": "El periodo o corte temporal (longitudinal o transversal) está declarado y justificado.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "12.5",
+          "criterio": "El diseño permite responder efectivamente a las preguntas de investigación y contrastar las hipótesis.",
+          "pts_max": 2,
+          "pts_parcial_50": 1,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 13,
+      "nombre": "Población y muestra",
+      "puntaje_maximo": 8,
+      "referencia": "Hernández-Sampieri (2018), Cap. 8, pp. 190–216; criterios de muestreo",
+      "subtotal_maximo": 8,
+      "items": [
+        {
+          "id": "13.1",
+          "criterio": "La población está definida con criterios precisos de inclusión y exclusión (no es una mención genérica).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "13.2",
+          "criterio": "El tamaño de la muestra está calculado o justificado (fórmula estadística, saturación o criterio muestral explícito).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "13.3",
+          "criterio": "El tipo de muestreo (probabilístico o no probabilístico) está declarado y es coherente con los objetivos del estudio.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "13.4",
+          "criterio": "Se especifica el procedimiento concreto de selección de la muestra (muestreo aleatorio simple, estratificado, por conveniencia, etc.).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "13.5",
+          "criterio": "Los criterios de inclusión y exclusión son pertinentes al fenómeno de estudio y no introduce sesgos injustificados.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "13.6",
+          "criterio": "La muestra es suficiente para lograr el poder estadístico necesario para las pruebas planteadas.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 14,
+      "nombre": "Técnicas e instrumentos de recolección de datos",
+      "puntaje_maximo": 5,
+      "referencia": "Hernández-Sampieri (2018), Cap. 9, pp. 217–262; validez y confiabilidad",
+      "subtotal_maximo": 5,
+      "items": [
+        {
+          "id": "14.1",
+          "criterio": "La técnica de recolección (encuesta, observación, análisis documental, experimento) es coherente con el diseño y las variables.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "14.2",
+          "criterio": "El instrumento seleccionado o construido mide exactamente los indicadores de las variables operacionalizadas.",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "14.3",
+          "criterio": "Se indica el proceso de validación del instrumento (validez de contenido, constructo o criterio) con autor o procedimiento específico.",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "14.4",
+          "criterio": "Se indica la confiabilidad del instrumento (Alfa de Cronbach, test-retest u otro coeficiente pertinente).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        }
+      ]
+    },
+    {
+      "numero": 15,
+      "nombre": "Técnicas de procesamiento y análisis de datos",
+      "puntaje_maximo": 3,
+      "referencia": "Hernández-Sampieri (2018), Cap. 10, pp. 270–310; análisis estadístico cuantitativo",
+      "subtotal_maximo": 3,
+      "items": [
+        {
+          "id": "15.1",
+          "criterio": "Se especifican las pruebas estadísticas que se usarán para contrastar las hipótesis (t de Student, ANOVA, regresión, correlación de Pearson/Spearman, etc.).",
+          "pts_max": 1.5,
+          "pts_parcial_50": 0.75,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "15.2",
+          "criterio": "Las pruebas estadísticas son coherentes con la escala de medición de las variables (paramétrica vs. no paramétrica).",
+          "pts_max": 1,
+          "pts_parcial_50": 0.5,
+          "pts_no_cumple": 0
+        },
+        {
+          "id": "15.3",
+          "criterio": "Se menciona el software o herramienta de análisis (SPSS, R, Python, Excel) que se utilizará.",
+          "pts_max": 0.5,
+          "pts_parcial_50": 0.25,
+          "pts_no_cumple": 0
+        }
+      ]
+    }
+  ],
+  "escala_de_interpretacion_del_puntaje_total": [
+    {
+      "rango_puntos": "90 – 100",
+      "nivel": "Excelente — Cumple todos los criterios metodológicos",
+      "accion_recomendada": "Aprobar sin observaciones"
+    },
+    {
+      "rango_puntos": "75 – 89",
+      "nivel": "Bueno — Cumple la mayoría de los criterios con observaciones menores",
+      "accion_recomendada": "Aprobar con observaciones menores"
+    },
+    {
+      "rango_puntos": "60 – 74",
+      "nivel": "Regular — Presenta deficiencias metodológicas importantes",
+      "accion_recomendada": "Requiere correcciones sustantivas"
+    },
+    {
+      "rango_puntos": "Menor a 60",
+      "nivel": "Insuficiente — No cumple los estándares metodológicos mínimos",
+      "accion_recomendada": "Reformular el proyecto"
+    }
+  ],
+  "fuente": "Instrumento elaborado por Josue — Tesis \"Uso de multi-agentes y su efecto en la calidad metodológica de proyectos de tesis en Ingeniería de la UPAO-2026\". Basado íntegramente en: Hernández-Sampieri, R. & Mendoza Torres, C.P. (2018). Metodología de la investigación: Las rutas cuantitativa, cualitativa y mixta (1ª ed.). McGraw-Hill."
+}
