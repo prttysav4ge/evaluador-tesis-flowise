@@ -303,36 +303,36 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
     ]
 
     # ------------------------------------------------------------------ #
-    #  4. Generar texto sugerido (post-pipeline, ambos modos)            #
-    #     Se limita a 45 s para no superar el timeout total del cliente. #
+    #  4. Evaluación con rúbrica + compuerta de umbral del Redactor       #
+    #     + métricas (G-Eval, Gain, Cosine, Context Precision).           #
     # ------------------------------------------------------------------ #
-    _TEXTO_SUGERIDO_TIMEOUT = 60  # segundos máximos para esta llamada extra
+    # Texto plano de la ENTRADA (sin los encabezados [Fragmento N | …]) para que
+    # el juez de rúbrica evalúe el contenido tal cual, no el formato.
+    original_text_plain = "\n\n".join(r.get("text", "") for r in raw_results)
+    result["original_context"] = retrieved_context   # para comparación en UI
+
     try:
-        from services.agent_service import generate_texto_sugerido
-        evaluation_data       = _extract_evaluation_data(result)
-        investigador_findings = _extract_investigador_findings(result)
-        texto_sugerido = await asyncio.wait_for(
-            generate_texto_sugerido(
-                original_context=retrieved_context,
+        eval_payload = await asyncio.wait_for(
+            _run_rubric_evaluation(
                 question=body.question,
-                final_evaluation=evaluation_data,
-                investigador_findings=investigador_findings,
+                seccion_label=body.seccion,
+                original_text=original_text_plain,
+                retrieved_context=retrieved_context,
+                pipeline_result=result,
+                reference_chunks=result.get("reference_chunks", []),
             ),
-            timeout=_TEXTO_SUGERIDO_TIMEOUT,
+            timeout=_RUBRICA_EVAL_TIMEOUT,
         )
-        result["texto_sugerido"]    = texto_sugerido
-        result["original_context"]  = retrieved_context   # para comparación en UI
+        result.update(eval_payload)
     except asyncio.TimeoutError:
         logger.warning(
-            f"⚠️  generate_texto_sugerido excedió {_TEXTO_SUGERIDO_TIMEOUT}s — "
+            f"⚠️  La evaluación con rúbrica excedió {_RUBRICA_EVAL_TIMEOUT}s — "
             "se omite en esta respuesta."
         )
-        result["texto_sugerido"]   = None
-        result["original_context"] = retrieved_context
+        result.setdefault("texto_sugerido", None)
     except Exception as exc:
-        logger.warning(f"⚠️  No se pudo generar texto sugerido: {exc}")
-        result["texto_sugerido"]   = None
-        result["original_context"] = retrieved_context
+        logger.warning(f"⚠️  No se pudo completar la evaluación con rúbrica: {exc}")
+        result.setdefault("texto_sugerido", None)
 
     elapsed = round(time.time() - start, 2)
     logger.info(f"✅ Query completada en {elapsed}s (modo: {mode})")
@@ -357,6 +357,12 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
 # Cantidad de fragmentos de la Biblioteca Metodológica a recuperar por consulta.
 # Más bajo que el TOP_K de la tesis para no inflar el prompt de los agentes.
 _REFS_TOP_K = 3
+
+# Topes de la evaluación con rúbrica (paso 4). El bloque completo (selección de
+# secciones + pre + Redactor + post + G-Eval + context precision) se acota con
+# _RUBRICA_EVAL_TIMEOUT; la llamada del Redactor mantiene su propio sub-tope.
+_TEXTO_SUGERIDO_TIMEOUT = 60    # s, llamada del Redactor (generate_texto_sugerido)
+_RUBRICA_EVAL_TIMEOUT   = 200   # s, evaluación con rúbrica completa
 
 
 def _build_page_where(
@@ -623,6 +629,106 @@ def _extract_evaluation_data(result: Dict[str, Any]) -> Dict[str, Any]:
         return result["memory"].get("mentor_final", {})
 
     return {}
+
+
+async def _run_rubric_evaluation(
+    question: str,
+    seccion_label: Optional[str],
+    original_text: str,
+    retrieved_context: str,
+    pipeline_result: Dict[str, Any],
+    reference_chunks: list,
+) -> Dict[str, Any]:
+    """
+    Evaluación con rúbrica + compuerta de umbral del Redactor + las 4 métricas.
+
+    Flujo:
+      1. Selección DINÁMICA de las secciones de rúbrica aplicables a la parte.
+      2. Juez puntúa la ENTRADA contra esas secciones → `pre` (puntos, %, 0-10, vig).
+      3. Compuerta: si `pre% >= REDACTOR_THRESHOLD` NO se reescribe (solo se exponen
+         los ítems a pulir vía las justificaciones del pre). Si `pre% < umbral` se
+         genera la SALIDA con el Redactor existente (intacto).
+      4. Si hubo reescritura: juez puntúa la SALIDA → `post` (mismo juez, para Gain)
+         y el PANEL calcula G-Eval (1-5). Gain de Hake y Cosine (guardrail).
+      5. Context Precision (sin referencia) sobre los chunks de los libros.
+
+    pre y post SIEMPRE salen del mismo juez de rúbrica (anti-sesgo del Gain).
+    """
+    from app.config import settings
+    from services import judge_service, metrics_service, rubric_service
+    from services.agent_service import generate_texto_sugerido
+
+    rubric_model, rubric_invoke = judge_service.get_rubric_invoke()
+
+    # 1 + 2. Secciones aplicables y puntaje de la ENTRADA (mismo juez).
+    secciones = await rubric_service.select_sections(seccion_label, llm_invoke=rubric_invoke)
+    pre = await rubric_service.score_text(original_text, secciones, llm_invoke=rubric_invoke)
+
+    threshold = settings.REDACTOR_THRESHOLD
+    reescrito = pre["porcentaje"] < threshold
+
+    texto_sugerido: Optional[str] = None
+    post: Optional[Dict[str, Any]] = None
+    geval: Optional[Dict[str, Any]] = None
+    gain: Optional[float] = None
+    cosine: Optional[float] = None
+
+    if reescrito:
+        # 3. Redactor (lógica existente intacta): genera la SALIDA mejorada.
+        evaluation_data       = _extract_evaluation_data(pipeline_result)
+        investigador_findings = _extract_investigador_findings(pipeline_result)
+        try:
+            texto_sugerido = await asyncio.wait_for(
+                generate_texto_sugerido(
+                    original_context=retrieved_context,
+                    question=question,
+                    final_evaluation=evaluation_data,
+                    investigador_findings=investigador_findings,
+                ),
+                timeout=_TEXTO_SUGERIDO_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.warning(f"⚠️  generate_texto_sugerido falló/timeout: {exc}")
+            texto_sugerido = None
+
+        # 4. Puntuar la SALIDA (post, mismo juez) + G-Eval (panel) en paralelo.
+        if texto_sugerido:
+            post, geval = await asyncio.gather(
+                rubric_service.score_text(texto_sugerido, secciones, llm_invoke=rubric_invoke),
+                judge_service.geval_quality(texto_sugerido, secciones),
+            )
+            gain   = metrics_service.compute_gain_score(
+                pre["porcentaje"], post["porcentaje"], max_score=1.0
+            )
+            cosine = metrics_service.compute_cosine_similarity(original_text, texto_sugerido)
+
+    # 5. Context Precision sobre los chunks de los LIBROS (componente RAG).
+    answer_for_cp = texto_sugerido or retrieved_context
+    context_precision = await metrics_service.compute_context_precision(
+        question, answer_for_cp, reference_chunks, llm_invoke=rubric_invoke
+    )
+
+    return {
+        "texto_sugerido": texto_sugerido,
+        "rubrica": {
+            "judge_model": rubric_model,
+            "secciones_seleccionadas": [s["numero"] for s in secciones],
+            "umbral": threshold,
+            "reescrito": reescrito,
+            "entrada": pre,    # incluye items + justificaciones (recomendaciones de pulido)
+            "salida": post,    # None si no se reescribió
+        },
+        "geval": geval,
+        "metrics": {
+            "geval_score":          geval["score"] if geval else None,
+            "geval_escala":         "1-5",
+            "gain_score":           gain,
+            "cosine_similarity":    cosine,
+            "cosine_flag":          metrics_service.cosine_guardrail_flag(cosine),
+            "context_precision":    context_precision,
+            "iterative_consistency": None,   # condicional — desactivada
+        },
+    }
 
 
 def _extract_investigador_findings(result: Dict[str, Any]) -> Dict[str, Any]:
