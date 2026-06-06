@@ -101,6 +101,32 @@ class RefsStore:
         logger.info(f"✅ {len(texts)} chunks de refs almacenados")
         return len(texts)
 
+    def add_precomputed(
+        self,
+        texts: List[str],
+        metadatas: List[Dict[str, Any]],
+        embeddings: List[List[float]],
+        ids: List[str],
+        batch_size: int = 2000,
+    ) -> int:
+        """
+        Agrega chunks con embeddings YA calculados (sin invocar el modelo).
+        Usado por el seeding desde el archivo semilla: evita re-embeber miles de
+        chunks en el arranque (clave para no agotar la RAM en Streamlit Cloud).
+        """
+        if not texts:
+            return 0
+        for i in range(0, len(texts), batch_size):
+            j = i + batch_size
+            self.collection.add(
+                documents=texts[i:j],
+                embeddings=embeddings[i:j],
+                metadatas=metadatas[i:j],
+                ids=ids[i:j],
+            )
+        logger.info(f"✅ {len(texts)} chunks de refs sembrados (embeddings precalculados)")
+        return len(texts)
+
     # ------------------------------------------------------------------ #
     #  Lectura                                                             #
     # ------------------------------------------------------------------ #
@@ -178,6 +204,46 @@ class RefsStore:
         )
         logger.warning("⚠️  Colección reference_books reiniciada")
         return True
+
+
+def seed_reference_books(npz_path: Optional[str] = None) -> int:
+    """
+    Siembra la colección reference_books desde un archivo .npz con embeddings YA
+    calculados (documents/metadatas/embeddings/ids), generado offline desde un
+    índice previo. Evita re-parsear los PDFs (cientos de páginas) y re-embeber
+    miles de chunks en el arranque — la causa del OOM en Streamlit Cloud.
+
+    Returns:
+        Chunks sembrados, o 0 si no hay archivo o la colección ya tenía datos.
+    """
+    import json
+    import os
+
+    import numpy as np
+
+    if npz_path is None:
+        # El seed vive en la raíz del repo (un nivel arriba de vectorstore/).
+        npz_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "reference_books_seed.npz",
+        )
+
+    if not os.path.exists(npz_path):
+        logger.info(
+            f"Seed de Biblioteca no encontrado ({npz_path}); "
+            "se intentará el indexado de PDFs."
+        )
+        return 0
+    if refs_store.collection.count() > 0:
+        return 0
+
+    data = np.load(npz_path, allow_pickle=True)
+    documents  = data["documents"].tolist()
+    metadatas  = [json.loads(m) for m in data["metadatas"].tolist()]
+    embeddings = data["embeddings"].astype("float32").tolist()
+    ids        = data["ids"].tolist()
+    logger.info(f"🌱 Sembrando Biblioteca desde seed: {len(documents)} chunks…")
+    return refs_store.add_precomputed(documents, metadatas, embeddings, ids)
 
 
 def index_reference_books(pdf_dir: str = "reference_books") -> int:

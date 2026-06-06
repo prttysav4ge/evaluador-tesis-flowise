@@ -77,7 +77,7 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     chroma_store.initialize()
 
     # Inicializar colección de libros metodológicos (Biblioteca Metodológica).
-    from vectorstore.refs_store import refs_store, index_reference_books
+    from vectorstore.refs_store import refs_store, index_reference_books, seed_reference_books
     refs_store.initialize()
 
     # Pre-cargar el modelo de embeddings (evita el cold-start en el primer request)
@@ -85,30 +85,35 @@ async def lifespan(_app: FastAPI):  # noqa: ARG001 — FastAPI requiere este par
     from embeddings.embedder import embedder
     embedder._load_model()
 
-    # Auto-index de la Biblioteca Metodológica si la colección está vacía.
-    # En producción (Streamlit Cloud) esta es la única forma de poblar la
-    # colección — los PDFs viajan commiteados en reference_books/.
+    # Poblar la Biblioteca Metodológica si la colección está vacía.
     #
-    # NO BLOQUEANTE: pdfplumber procesa cientos de páginas (TOC-aware) y genera
-    # miles de embeddings; tarda minutos. Si bloqueáramos el lifespan, Streamlit
-    # Cloud mata el arranque por timeout ("Error running app"). Por eso lo
-    # lanzamos en un hilo de fondo: la app empieza a servir de inmediato y la
-    # Biblioteca se va poblando. Las consultas degradan con gracia mientras
-    # tanto (routes/query.py ya chequea collection.count() > 0 antes de usarla).
+    # Preferimos SEMBRAR desde `reference_books_seed.npz` (embeddings ya
+    # calculados): es liviano y rápido, sin re-parsear los PDFs ni re-embeber
+    # miles de chunks. Esto evita el OOM que mataba el arranque en Streamlit
+    # Cloud (1 GB de RAM) cuando se indexaba el libro de ~537 páginas en runtime.
+    #
+    # Fallback (solo si no hay seed, p.ej. dev local sin el archivo): indexar los
+    # PDFs de reference_books/. Ambos caminos van en un hilo de fondo NO bloqueante
+    # para no exceder el timeout de arranque; las consultas degradan con gracia
+    # mientras tanto (routes/query.py chequea collection.count() > 0).
     refs_count = refs_store.collection.count()
     if refs_count == 0:
-        async def _bg_index_biblioteca() -> None:
+        async def _bg_poblar_biblioteca() -> None:
             try:
-                logger.info("📚 Biblioteca vacía — auto-indexando en SEGUNDO PLANO…")
+                seeded = await asyncio.to_thread(seed_reference_books)
+                if seeded:
+                    logger.info(f"🌱 Biblioteca sembrada desde seed: {seeded} chunks")
+                    return
+                logger.info("📚 Sin seed — auto-indexando PDFs en SEGUNDO PLANO…")
                 added = await asyncio.to_thread(index_reference_books)
                 logger.info(f"📚 Auto-index de fondo completado: {added} chunks agregados")
             except Exception as exc:
-                logger.exception(f"⚠️  Auto-index de biblioteca falló: {exc}")
+                logger.exception(f"⚠️  Poblar la biblioteca falló: {exc}")
 
-        _task = asyncio.create_task(_bg_index_biblioteca())
+        _task = asyncio.create_task(_bg_poblar_biblioteca())
         _BG_TASKS.add(_task)
         _task.add_done_callback(_BG_TASKS.discard)
-        logger.info("📚 Biblioteca en indexado de fondo; la app ya acepta requests.")
+        logger.info("📚 Biblioteca poblándose en segundo plano; la app ya acepta requests.")
     else:
         logger.info(f"📚 Biblioteca ya indexada: {refs_count} chunks")
     logger.info("✅ Sistema listo para recibir requests")
