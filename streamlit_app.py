@@ -378,7 +378,7 @@ def render_sidebar() -> bool:
     with st.sidebar:
         # ── Header ────────────────────────────────────────────────────────
         st.title("🌱 Mentoría UPAO")
-        st.caption("PoC · Flowise + RAG + Groq Llama 3.3")
+        st.caption("PoC · Flowise + RAG + GPT")
         st.markdown("")  # respiro vertical
 
         # ── Estado del workflow ───────────────────────────────────────────
@@ -1183,10 +1183,10 @@ def _render_tab_evaluation(agents: dict, final_data: dict, raw_result: dict) -> 
             )
         else:
             st.info(
-                "Texto sugerido no disponible. Suele deberse al límite TPM de Groq "
-                "(tier free): el pipeline ya consumió la cuota de tokens del minuto y "
+                "Texto sugerido no disponible. Suele deberse al límite de tokens/min de "
+                "OpenAI: el pipeline ya consumió la cuota del minuto y "
                 "la última llamada recibió un 429. Reintenta en ~1 min, baja las "
-                "iteraciones/Top-K, o revisa que `GROQ_API_KEY` esté configurada."
+                "iteraciones/Top-K, o revisa que `OPENAI_API_KEY` esté configurada."
             )
 
     # ── Feedback del Auditor ─────────────────────────────────────────────
@@ -2073,7 +2073,7 @@ def page_query():
         spinner_msg = (
             f"El panel multiagente está analizando el proyecto… "
             f"{iters} iteración(es) × 6 agentes — "
-            "puede tardar entre 1 y 5 minutos (más si Groq aplica rate-limiting)."
+            "puede tardar entre 1 y 5 minutos (más si OpenAI aplica rate-limiting)."
         )
         with st.spinner(spinner_msg):
             t0 = time.time()
@@ -2121,9 +2121,9 @@ def page_query():
                 st.info(
                     "💡 **Sugerencias para acelerar la consulta:**\n"
                     "- Reduce **Top-K** en parámetros avanzados (menos contexto = menos tokens).\n"
-                    "- Si tu plan de Groq es Free, considera actualizar al Dev Tier en "
-                    "[console.groq.com/settings/billing](https://console.groq.com/settings/billing) "
-                    "para subir el límite TPM de 6 000 a 30 000+.\n"
+                    "- Si chocas con el rate-limit de OpenAI, revisa los límites de tu cuenta en "
+                    "[platform.openai.com/account/limits](https://platform.openai.com/account/limits) "
+                    "para subir la cuota de tokens por minuto.\n"
                     "- También puedes desactivar Flowise con `USE_FLOWISE=false` en `.env` "
                     "para saltar el primer intento (90 s) y usar directamente los agentes Python."
                 )

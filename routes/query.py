@@ -270,7 +270,7 @@ async def query_thesis(body: QueryRequest) -> QueryResponse:
             detail=(
                 f"La evaluación superó el tope global de {_EVAL_GLOBAL_TIMEOUT}s. "
                 "Baja las iteraciones a 1 y el Top-K, verifica que el nodo End de "
-                "Flowise devuelva 'Last Output', o sube a Groq Dev Tier."
+                "Flowise devuelva 'Last Output', o revisa los límites de tu cuenta OpenAI."
             ),
         )
 
@@ -562,7 +562,7 @@ async def _call_flowise_with_fallback(
 #   - _EVAL_GLOBAL_TIMEOUT: techo de la evaluación COMPLETA (todas las
 #     iteraciones + fallbacks de Flowise sumados). Evita que N iteraciones se
 #     acumulen sin control (p.ej. 3 × (Flowise 90s + Python 180s) ≈ 13 min).
-# Causa de fondo: Groq tier gratuito limita 6 llamadas LLM seguidas → 429 →
+# Causa de fondo: si OpenAI aplica rate-limit a 6 llamadas LLM seguidas → 429 →
 # cascada de backoff. Sin estos topes: 6 agentes × 5 intentos × 30s ≈ 20 min.
 _PYTHON_PIPELINE_TIMEOUT = 300  # segundos, por corrida del pipeline Python
 _EVAL_GLOBAL_TIMEOUT     = 600  # segundos, techo de la evaluación completa
@@ -586,15 +586,15 @@ async def _call_python_agents(
     except asyncio.TimeoutError:
         logger.error(
             f"⏰ Pipeline Python superó {_PYTHON_PIPELINE_TIMEOUT}s "
-            "(probable rate-limit de Groq en tier gratuito). Abortando para no "
+            "(probable rate-limit de OpenAI). Abortando para no "
             "colgar la UI."
         )
         raise HTTPException(
             status_code=504,
             detail=(
                 f"La evaluación con agentes Python superó {_PYTHON_PIPELINE_TIMEOUT}s, "
-                "probablemente por rate-limiting de Groq (tier gratuito). "
-                "Reintenta con menos iteraciones / Top-K más bajo, o sube a Groq Dev Tier."
+                "probablemente por rate-limiting de OpenAI. "
+                "Reintenta con menos iteraciones / Top-K más bajo, o revisa los límites de tu cuenta OpenAI."
             ),
         )
     except Exception as exc:

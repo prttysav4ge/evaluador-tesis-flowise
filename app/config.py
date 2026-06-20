@@ -15,15 +15,11 @@ class Settings(BaseSettings):
 
     # ----- LLM -----
     # El proveedor se elige automáticamente según las claves disponibles:
-    # Groq → OpenAI → Ollama (en ese orden de prioridad).
-    # Puedes forzar uno con LLM_PROVIDER=groq|openai|ollama.
-    LLM_PROVIDER: str = "auto"   # "auto" | "groq" | "openai" | "ollama"
+    # OpenAI → Ollama (en ese orden de prioridad).
+    # Puedes forzar uno con LLM_PROVIDER=openai|ollama.
+    LLM_PROVIDER: str = "auto"   # "auto" | "openai" | "ollama"
 
-    # Groq (recomendado: usa los mismos modelos que Flowise, sin coste extra)
-    GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.1-8b-instant"   # mismo modelo que el Agentflow
-
-    # OpenAI
+    # OpenAI (proveedor principal)
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
 
@@ -56,11 +52,11 @@ class Settings(BaseSettings):
 
     # ----- JUEZ G-EVAL / RÚBRICA -----
     # Panel de jueces LLM-as-judge. DEBEN ser modelos DISTINTOS del generador
-    # (GROQ_MODEL) para evitar sesgo. Lista separada por comas; se instancian
-    # todos sobre la API de Groq (compatible OpenAI). Confirmar IDs vigentes en
-    # console.groq.com/docs/models si alguno deja de estar disponible.
+    # (OPENAI_MODEL) para evitar sesgo. Lista separada por comas; se instancian
+    # todos sobre la API de OpenAI. Confirmar IDs vigentes en
+    # platform.openai.com/docs/models si alguno deja de estar disponible.
     GEVAL_JUDGE_MODELS: str = (
-        "llama-3.3-70b-versatile,openai/gpt-oss-20b,qwen/qwen3-32b"
+        "gpt-4o,gpt-4.1-mini,gpt-4.1-nano"
     )
     # Umbral (proporción 0-1) del puntaje de rúbrica de la ENTRADA por encima del
     # cual NO se reescribe (solo se recomienda pulir). Orientativo: 0.90.

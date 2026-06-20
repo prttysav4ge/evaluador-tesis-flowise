@@ -12,8 +12,8 @@ Dos responsabilidades, alineadas con las dos escalas que conviven:
      ENTRADA (pre) y la SALIDA (post). pre y post salen SIEMPRE del mismo juez para
      que el Gain de Hake sea válido — nunca del auto-score de un agente.
 
-Todos los jueces se instancian sobre la API de Groq (compatible OpenAI). Reusa el
-backoff de `agent_service._ainvoke_with_retry`. Si no hay GROQ_API_KEY o ningún
+Todos los jueces se instancian sobre la API de OpenAI. Reusa el
+backoff de `agent_service._ainvoke_with_retry`. Si no hay OPENAI_API_KEY o ningún
 modelo válido, las funciones lanzan ValueError (los callers lo capturan safe-fail).
 """
 from __future__ import annotations
@@ -45,29 +45,28 @@ def _judge_models() -> List[str]:
     """Modelos del panel, garantizando que NINGUNO sea el generador (anti-sesgo)."""
     from app.config import settings
 
-    generador = settings.GROQ_MODEL.strip().lower()
+    generador = settings.OPENAI_MODEL.strip().lower()
     modelos = [m for m in settings.judge_models if m.strip().lower() != generador]
     if not modelos:
         raise ValueError(
             "No hay modelos de juez válidos: GEVAL_JUDGE_MODELS está vacío o todos "
-            "coinciden con el generador GROQ_MODEL. Configura modelos distintos."
+            "coinciden con el generador OPENAI_MODEL. Configura modelos distintos."
         )
     return modelos
 
 
 def _build_judge_llm(model: str):
-    """Instancia un juez sobre Groq. temperature=0 para calificación estable."""
+    """Instancia un juez sobre OpenAI. temperature=0 para calificación estable."""
     from app.config import settings
     from langchain_openai import ChatOpenAI
 
-    if not settings.GROQ_API_KEY:
+    if not settings.OPENAI_API_KEY:
         raise ValueError(
-            "GROQ_API_KEY no configurada: el panel de jueces G-Eval requiere Groq."
+            "OPENAI_API_KEY no configurada: el panel de jueces G-Eval requiere OpenAI."
         )
     return ChatOpenAI(
-        api_key=settings.GROQ_API_KEY,
+        api_key=settings.OPENAI_API_KEY,
         model=model,
-        base_url="https://api.groq.com/openai/v1",
         temperature=0.0,
         max_tokens=1500,
         max_retries=0,

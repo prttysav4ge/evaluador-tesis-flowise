@@ -49,7 +49,7 @@ plotly>=5.20.0
 pandas>=1.4.0
 
 # Métricas: las 4 vigentes (G-Eval, Gain, Cosine, Context Precision) no requieren
-# librerías extra — el juez usa langchain-openai (Groq) y el embedder ya instalado.
+# librerías extra — el juez usa langchain-openai (OpenAI) y el embedder ya instalado.
 # ROUGE/BLEU/Kappa fueron eliminados; Context Precision se reimplementa sin `ragas`.
 
 # NOTA: ejecutar streamlit con:

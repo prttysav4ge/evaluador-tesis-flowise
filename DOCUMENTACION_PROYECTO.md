@@ -93,14 +93,14 @@ Permitir a docentes, tutores y estudiantes obtener una evaluación profunda, est
 │ - Detección     │  │ multilingual-   │  │                         │
 │   de secciones  │  │ e5-small        │  │ Modo B: Python puro     │
 └────────┬────────┘  └────────┬────────┘  │   - LangChain           │
-         │                   │            │   - OpenAI/Groq/Ollama  │
+         │                   │            │   - OpenAI/Ollama       │
          └──────────┬─────────┘            └──────────┬──────────────┘
                     │                                  │
                     ▼                                  ▼
             ┌───────────────┐                ┌────────────────────┐
             │  ChromaDB     │                │  Texto Sugerido    │
             │  Persistente  │                │  (post-pipeline)   │
-            │  ./chroma_db  │                │  Groq/OpenAI/Ollama│
+            │  ./chroma_db  │                │  OpenAI/Ollama     │
             └───────────────┘                └────────────────────┘
 ```
 
@@ -117,7 +117,7 @@ Permitir a docentes, tutores y estudiantes obtener una evaluación profunda, est
 | **Uvicorn** | ≥ 0.29.0 | Servidor ASGI |
 | **Pydantic** | ≥ 2.5.0 | Validación de datos y settings |
 | **LangChain** | ≥ 0.3.0 | Orquestación de LLMs |
-| **langchain-openai** | ≥ 0.2.0 | Integración con OpenAI/Groq |
+| **langchain-openai** | ≥ 0.2.0 | Integración con OpenAI |
 | **httpx** | ≥ 0.27.0 | Cliente HTTP asíncrono (Flowise) |
 
 ### Vectores y Embeddings
@@ -139,8 +139,7 @@ Permitir a docentes, tutores y estudiantes obtener una evaluación profunda, est
 
 | Proveedor | Modelo por defecto | Notas |
 |-----------|------------------|-------|
-| **Groq** | `llama-3.1-8b-instant` | Recomendado (gratis, rápido) |
-| **OpenAI** | `gpt-4o-mini` | Requiere API key de pago |
+| **OpenAI** | `gpt-4o-mini` | Proveedor principal (requiere API key) |
 | **Ollama** | `llama3.2` | Ejecución local, sin coste |
 | **Flowise** | Configurable en el Agentflow | Agentes orquestados visualmente |
 
@@ -221,10 +220,8 @@ class Settings(BaseSettings):
     PORT: int = 8000
     DEBUG: bool = True
 
-    # LLM — modo automático: Groq → OpenAI → Ollama
+    # LLM — modo automático: OpenAI → Ollama
     LLM_PROVIDER: str = "auto"
-    GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.1-8b-instant"
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -387,11 +384,10 @@ Implementa el modo **Python puro** (sin Flowise). Ejecuta los 6 agentes de forma
 
 #### Selección dinámica de LLM (`_get_texto_llm`)
 Prioridad automática cuando `LLM_PROVIDER=auto`:
-1. **Groq** — si `GROQ_API_KEY` está configurado
-2. **OpenAI** — si `OPENAI_API_KEY` está configurado
-3. **Ollama** — fallback local, siempre disponible
+1. **OpenAI** — si `OPENAI_API_KEY` está configurado
+2. **Ollama** — fallback local, siempre disponible
 
-Groq es compatible con la API de OpenAI, por lo que se integra via `langchain-openai` apuntando a `https://api.groq.com/openai/v1`.
+OpenAI se integra via `langchain-openai`.
 
 #### Tolerancia a errores de JSON (`_parse_json`)
 El parser es tolerante: intenta 3 estrategias antes de fallar:
@@ -840,7 +836,7 @@ chroma_store.format_context()    → texto con metadatos para el prompt
       │                                              Flowise Agentflow
       │                                                    │
       │                                              6 nodos LLM en Flowise
-      │                                              (Groq configurado en Flowise)
+      │                                              (LLM configurado en Flowise)
       │                                                    │
       │                                              JSON evaluación final
       │                                                    │
@@ -857,7 +853,7 @@ chroma_store.format_context()    → texto con metadatos para el prompt
       ┌──────────────────────────────────────────────────┘
       │
       ▼
-generate_texto_sugerido()        → versión mejorada de la sección (Groq/OpenAI/Ollama)
+generate_texto_sugerido()        → versión mejorada de la sección (OpenAI/Ollama)
       │
       ▼
 QueryResponse: {question, mode, chunks_retrieved, elapsed_seconds, result}
@@ -913,11 +909,9 @@ FLOWISE_CHATFLOW_ID=8ef396a1-4ae8-45b7-93cb-5b449e928854
 FLOWISE_API_KEY=                                   # opcional si hay autenticación en Flowise
 
 # ── LLM (para texto sugerido y modo Python puro) ─────────────────────
-LLM_PROVIDER=auto                                  # auto | groq | openai | ollama
-GROQ_API_KEY=gsk_...                               # gratis en console.groq.com
-GROQ_MODEL=llama-3.1-8b-instant
-# OPENAI_API_KEY=sk-...
-# OPENAI_MODEL=gpt-4o-mini
+LLM_PROVIDER=auto                                  # auto | openai | ollama
+OPENAI_API_KEY=sk-...                              # platform.openai.com
+OPENAI_MODEL=gpt-4o-mini
 # OLLAMA_BASE_URL=http://localhost:11434
 # OLLAMA_MODEL=llama3.2
 
@@ -945,9 +939,9 @@ CHUNK_OVERLAP=150                                  # solapamiento entre chunks
 Los agentes corren dentro de Flowise como un flujo visual de nodos LLM:
 - Requiere Flowise corriendo en `localhost:3000`
 - El `FLOWISE_CHATFLOW_ID` apunta al Agentflow con los 6 nodos
-- Los modelos LLM (Groq) se configuran directamente en Flowise, no en `.env`
+- Los modelos LLM se configuran directamente en Flowise, no en `.env`
 - El contexto RAG se trunca a 1500 chars para respetar `maxTokens` de los nodos
-- El texto sugerido sí usa el LLM configurado en `.env` (Groq/OpenAI/Ollama)
+- El texto sugerido sí usa el LLM configurado en `.env` (OpenAI/Ollama)
 
 **Ventajas:** Visual, editable sin código, trazabilidad de nodos  
 **Desventajas:** Requiere Flowise corriendo, más latencia por HTTP
@@ -956,7 +950,7 @@ Los agentes corren dentro de Flowise como un flujo visual de nodos LLM:
 
 Los 6 agentes se ejecutan directamente en Python via LangChain:
 - No requiere Flowise
-- Usa el LLM configurado en `.env` (Groq → OpenAI → Ollama)
+- Usa el LLM configurado en `.env` (OpenAI → Ollama)
 - Cada agente hace una llamada independiente al LLM
 - Memoria completamente controlada en Python
 
